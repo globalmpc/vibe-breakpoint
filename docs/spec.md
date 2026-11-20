@@ -12,7 +12,7 @@ script: render ──► chart.svg/.png, report.md        Claude: explains in pl
 script: teardown (always)
 ```
 
-CLI (bundle: `${CLAUDE_PLUGIN_ROOT}/scripts/vibe-breakpoint.mjs`):
+CLI (bundle: `${CLAUDE_SKILL_DIR}/scripts/vibe-breakpoint.mjs`):
 
 ```
 vibe-breakpoint inspect  <project>              # env names, framework, DB/ORM, Docker availability → .vibe-breakpoint/inspect.json (D-048)
@@ -191,4 +191,4 @@ Never open real `.env*` files. Never connect to a database or URL from the user'
 
 ## 12. README must contain
 
-Chart image at the top · install (marketplace add + plugin install) · what it measures · **what it never touches** (project unchanged, throwaway DB, env names only, no outside calls, local only) · requirements (Docker) · how the breaking point is defined · server profiles · limits · cleanup · license · links to vibe-preflight and vibe-bill.
+Chart image at the top · install (`npx skills add`) · what it measures · **what it never touches** (project unchanged, throwaway DB, env names only, no outside calls, local only) · requirements (Docker) · how the breaking point is defined · server profiles · limits · cleanup · license · links to vibe-preflight and vibe-bill.

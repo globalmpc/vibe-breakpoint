@@ -24,7 +24,7 @@ See `docs/decisions.md` → Open items (O-1 repo owner, O-2 shared marketplace, 
 - D-013: confirm MIT (a `LICENSE` file now exists).
 - O-3: run on 2-3 public repos of your choice (not done; detection/boot misses on real repos are still unknown). O-2: shared marketplace.
 - Fresh install on another machine/user: only checked with an isolated `CLAUDE_CONFIG_DIR` on this machine.
-- Push the commit and the local tag `v0.1.0` yourself. The README install line `claude plugin marketplace add globalmpc/vibe-breakpoint` only works once that repo is public and has this code.
+- Push the commit and the local tag `v0.1.0` yourself. The README install command (`npx skills add globalmpc/vibe-breakpoint`) only works once that repo is public and has this code.
 
 ## Needs owner check (Phase 7)
 

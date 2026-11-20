@@ -1968,18 +1968,29 @@ async function svgToPng(svg, assetsDir) {
   return new Resvg2(svg, { font: { fontBuffers, defaultFontFamily: "Liberation Mono", loadSystemFonts: false }, fitTo: { mode: "original" } }).render().asPng();
 }
 
-// plugins/vibe-breakpoint/.claude-plugin/plugin.json
-var plugin_default = {
-  name: "vibe-breakpoint",
+// package.json
+var package_default = {
+  name: "vibe-breakpoint-dev",
   version: "0.1.0",
-  description: "Find how many users your vibe-coded app can handle before it breaks, and which database queries slow it down as data grows. Tests an isolated copy of your app and never touches your project.",
-  author: {
-    name: "Rickard Elsen"
+  private: true,
+  type: "module",
+  engines: {
+    node: "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
-  homepage: "https://github.com/globalmpc/vibe-breakpoint",
-  repository: "https://github.com/globalmpc/vibe-breakpoint",
-  license: "MIT",
-  keywords: ["vibe-coding", "load-testing", "stress-testing", "performance-testing", "n-plus-one", "postgresql", "docker"]
+  scripts: {
+    build: `esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=skills/vibe-breakpoint/scripts/vibe-breakpoint.mjs && node -e "const f=require('fs');f.mkdirSync('skills/vibe-breakpoint/assets',{recursive:true});f.copyFileSync('node_modules/@resvg/resvg-wasm/index_bg.wasm','skills/vibe-breakpoint/assets/resvg.wasm')"`,
+    pretest: "npm run build",
+    test: "vitest run",
+    "test:e2e": "npm run build && vitest run --config vitest.e2e.config.ts",
+    typecheck: "tsc"
+  },
+  devDependencies: {
+    "@resvg/resvg-wasm": "2.6.2",
+    "@types/node": "^26.6.6",
+    esbuild: "^0.28.2",
+    typescript: "^7.0.2",
+    vitest: "^5.1.1"
+  }
 };
 
 // src/cli.ts
@@ -2167,7 +2178,7 @@ ${e instanceof Error ? e.message : ""}`);
         flags = computeFlags(raw, PROBE_REQUESTS, seed.sizes, scans, env);
         for (const f of flags) console.log(`vibe-breakpoint: flag ${f.flag} ${f.endpoint} (${f.evidence.metric} S ${f.evidence.by_size.S} -> L ${f.evidence.by_size.L})`);
       } else console.log("vibe-breakpoint: flags need sizes S and L; skipping flags");
-      resultBase = { runId, toolVersion: plugin_default.version, profile, size: null, stageDurationS: durationS, thinkTimeS: scenario.think_time_s, stages: [], probe, flags };
+      resultBase = { runId, toolVersion: package_default.version, profile, size: null, stageDurationS: durationS, thinkTimeS: scenario.think_time_s, stages: [], probe, flags };
       safeWriteOut(project, "out/result.json", JSON.stringify(buildResult(resultBase), null, 2));
     }
     if (scenario) {
@@ -2189,7 +2200,7 @@ ${e instanceof Error ? e.message : ""}`);
         console.log(`vibe-breakpoint: stage ${users} users: p50 ${st.p50_ms} ms, p95 ${st.p95_ms} ms, errors ${(st.error_rate * 100).toFixed(2)} %, app cpu ${st.app_cpu}, db cpu ${st.db_cpu}, app mem ${st.app_mem_mb} MB`);
         if (isBroken(st)) break;
       }
-      const result = buildResult({ runId, toolVersion: plugin_default.version, profile, size: cfgSize, stageDurationS: durationS, thinkTimeS: scenario.think_time_s, stages: done, probe, flags });
+      const result = buildResult({ runId, toolVersion: package_default.version, profile, size: cfgSize, stageDurationS: durationS, thinkTimeS: scenario.think_time_s, stages: done, probe, flags });
       safeWriteOut(project, "out/result.json", JSON.stringify(result, null, 2));
       const bp = result.breaking_point;
       console.log(bp ? `vibe-breakpoint: breaking point ${bp.users_broke} users (${bp.reason}); handles about ${bp.users_ok}; limiting: ${result.limiting_resource}` : `vibe-breakpoint: no breaking point up to ${done[done.length - 1].users}`);
@@ -2242,7 +2253,7 @@ function inspectCmd(project) {
   const isFile = (f) => lstatSync3(join6(project, ".vibe-breakpoint", f), { throwIfNoEntry: false })?.isFile() ?? false;
   const info = {
     schema: 1,
-    tool_version: plugin_default.version,
+    tool_version: package_default.version,
     docker: docker2,
     supported: Boolean(plan),
     unsupported_reason: unsupported,
@@ -2304,7 +2315,7 @@ async function renderCmd(project) {
   console.log(`vibe-breakpoint: wrote ${wrote.join(", ")}`);
 }
 if (values.version) {
-  console.log(plugin_default.version);
+  console.log(package_default.version);
 } else if (values.help) {
   process.stdout.write(usage);
 } else if (cmd === "cleanup") {

@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { isRealEnvFile } from "../../src/sandbox/copy.js";
 import { RUN_DIR_RE, runDir } from "../../src/sandbox/sandbox.js";
 
-const bundle = resolve("plugins/vibe-breakpoint/scripts/vibe-breakpoint.mjs");
+const bundle = resolve("skills/vibe-breakpoint/scripts/vibe-breakpoint.mjs");
 const FIXTURES = ["express-pg", "next-drizzle"].map((n) => resolve("fixtures", n));
 const tmpProjects: Record<string, string> = {}; // name -> temp copy (fixtures are never mutated)
 const copyFixture = (name: string): string => {

@@ -17,7 +17,7 @@ import { redact } from "./sandbox/test-env.js";
 import { chartSvg, projectLabel, resultError, type Result } from "./render/chart.js";
 import { reportMd, type MockCall } from "./render/report.js";
 import { svgToPng } from "./render/png.js";
-import manifest from "../plugins/vibe-breakpoint/.claude-plugin/plugin.json" with { type: "json" };
+import manifest from "../package.json" with { type: "json" };
 
 const usage = `usage:
   vibe-breakpoint inspect  <project>

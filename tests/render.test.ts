@@ -5,7 +5,7 @@ import { chartSvg, projectLabel, resultError, worstEndpoint } from "../src/rende
 import { reportMd } from "../src/render/report.js";
 import { svgToPng } from "../src/render/png.js";
 
-const assets = "plugins/vibe-breakpoint/assets";
+const assets = "skills/vibe-breakpoint/assets";
 const st = (users: number, p95: number | null, err = 0) => ({ users, p50_ms: 10, p95_ms: p95, error_rate: err, requests: 100, app_cpu: 0.3, db_cpu: 0.2, app_mem_mb: 100 });
 const pe = (q: number, ms: number, rows = 1) => ({ queries_per_req: q, db_ms_per_req: ms, rows_per_req: rows, top_queries: [{ query: "SELECT FAKESECRET_x FROM secret_table", calls_per_req: 1, mean_ms: 1, rows_per_req: 1 }] });
 const base = { runId: "vb-20261119120000-beef", toolVersion: "0.0.1", profile: "small" as const, size: "M", stageDurationS: 60, thinkTimeS: 1 };

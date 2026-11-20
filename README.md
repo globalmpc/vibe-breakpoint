@@ -4,16 +4,16 @@
 
 *Example from the bundled `express-pg` test app on a simulated small server (short run: 10 and 25 users, 20 s each).*
 
-**Find out how many users your vibe-coded app can handle at the same time, and which database queries get slower as your data grows.** A Claude Code plugin. One command: `/vibe-breakpoint`.
+**Find out how many users your vibe-coded app can handle at the same time, and which database queries get slower as your data grows.** A Claude Code skill. One command: `/vibe-breakpoint`.
 
 ## Install
-
 ```
-claude plugin marketplace add globalmpc/vibe-breakpoint
-claude plugin install vibe-breakpoint@vibe-breakpoint
+npx skills add globalmpc/vibe-breakpoint --skill vibe-breakpoint -g -a claude-code
 ```
 
-Then open your project in Claude Code and run `/vibe-breakpoint` (or `/vibe-breakpoint:vibe-breakpoint` if another command has the same name).
+This copies the skill (with its bundled script, templates and font) to `~/.claude/skills/vibe-breakpoint/`. Restart Claude Code, open your project and run `/vibe-breakpoint`. Update by running the command again. Remove with `npx skills remove vibe-breakpoint -g`.
+
+No Node tooling? `git clone https://github.com/globalmpc/vibe-breakpoint && cp -r vibe-breakpoint/skills/vibe-breakpoint ~/.claude/skills/` does the same.
 
 ## What it measures
 
@@ -35,7 +35,7 @@ Every number comes from a measurement. Claude writes the test inputs and explain
 ## Requirements
 
 - Docker (Engine 25+ with Compose 2.20.2+). Without Docker you only get a static report from reading the code, clearly labelled "no load test ran".
-- Node 20+ (the plugin ships as a single script; nothing to `npm install`).
+- Node 20+ (the skill ships a single script; nothing to `npm install`).
 - A Node backend (Next.js or Express-style) that talks to Postgres directly (Prisma, Drizzle, Knex or `pg`). Supabase/Firebase client-API apps, non-Node backends and staging URLs are not supported yet.
 - Time: about 10-15 minutes with the default ramp.
 
@@ -64,14 +64,14 @@ The test runs on a fixed, printed profile so numbers are comparable.
 Everything the tool creates carries a run label and is removed when the run ends, fails or is interrupted. If a run was killed hard, remove leftovers with:
 
 ```
-node "<plugin folder>/scripts/vibe-breakpoint.mjs" cleanup
+node ~/.claude/skills/vibe-breakpoint/scripts/vibe-breakpoint.mjs cleanup
 ```
 
 (`cleanup --all` also removes runs that still look alive.) The folder `.vibe-breakpoint/` in your project holds the results and can be deleted any time.
 
 ## License
 
-MIT. Bundled fonts and the PNG renderer keep their own licences, see `plugins/vibe-breakpoint/assets/`.
+MIT. Bundled fonts and the PNG renderer keep their own licences, see `skills/vibe-breakpoint/assets/`.
 
 ## Related
 
