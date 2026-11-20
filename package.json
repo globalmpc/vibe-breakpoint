@@ -1,12 +1,13 @@
 {
   "name": "vibe-breakpoint-dev",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
-    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=plugins/vibe-breakpoint/scripts/vibe-breakpoint.mjs && node -e \"const f=require('fs');f.mkdirSync('plugins/vibe-breakpoint/assets',{recursive:true});f.copyFileSync('node_modules/@resvg/resvg-wasm/index_bg.wasm','plugins/vibe-breakpoint/assets/resvg.wasm')\"",
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=skills/vibe-breakpoint/scripts/vibe-breakpoint.mjs && node -e \"const f=require('fs');f.mkdirSync('skills/vibe-breakpoint/assets',{recursive:true});f.copyFileSync('node_modules/@resvg/resvg-wasm/index_bg.wasm','skills/vibe-breakpoint/assets/resvg.wasm')\"",
     "pretest": "npm run build",
     "test": "vitest run",
     "test:e2e": "npm run build && vitest run --config vitest.e2e.config.ts",

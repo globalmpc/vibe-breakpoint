@@ -2,19 +2,17 @@
 
 Claude Code plugin (skill `/vibe-breakpoint`) that finds how many users a vibe-coded app can handle at the same time, and which database queries slow it down as data grows. It tests an **isolated copy** of the app and never changes the user's project.
 
-## Repo layout (Claude Code plugin marketplace)
+## Repo layout
 
-This repo is a **marketplace** that contains one **plugin**. Users install the plugin; everything else is for development.
+A Claude Code **skill** installed with `npx skills add globalmpc/vibe-breakpoint --skill vibe-breakpoint -g -a claude-code` (no plugin, no marketplace, D-058). `skills/vibe-breakpoint/` is the only folder users receive; everything else is for development.
 
 ```
-.claude-plugin/marketplace.json     # marketplace manifest; lists the plugin (source: ./plugins/vibe-breakpoint)
-plugins/vibe-breakpoint/            # THE PLUGIN — the only folder users receive
-  .claude-plugin/plugin.json        # plugin manifest (only this file lives in .claude-plugin/)
-  skills/vibe-breakpoint/SKILL.md   # the product skill (+ references/ next to it)
-  scripts/                          # built bundles (committed), called via ${CLAUDE_PLUGIN_ROOT}/scripts/
+skills/vibe-breakpoint/             # THE PRODUCT — self-contained skill folder
+  SKILL.md (+ references/)          # the skill
+  scripts/                          # built bundle (committed), called via ${CLAUDE_SKILL_DIR}/scripts/
   templates/                        # compose, Dockerfiles, mock server, k6 script templates
-  assets/                           # bundled font (+ wasm for PNG if used)
-src/                                # TypeScript source → bundled into plugins/vibe-breakpoint/scripts/
+  assets/                           # bundled font + wasm for PNG
+src/                                # TypeScript source → bundled into skills/vibe-breakpoint/scripts/
 tests/                              # vitest
 fixtures/                           # small runnable fake apps (fake secrets only)
 docs/                               # plan, spec, decisions, status
@@ -22,10 +20,9 @@ docs/                               # plan, spec, decisions, status
 ```
 
 Rules for the layout:
-- Component folders (`skills/`, `templates/`, `scripts/`, `assets/`) sit at the **plugin root**, never inside `.claude-plugin/`.
+- The skill folder must stay self-contained: the installer copies only it. Every path to its own files uses `${CLAUDE_SKILL_DIR}`.
 - Runtime code must not need `node_modules`: scripts are self-contained esbuild bundles using Node built-ins.
-- Inside the plugin, every path to its own files uses `${CLAUDE_PLUGIN_ROOT}`.
-- `version` in `plugin.json` and in the marketplace entry must always match (a test enforces it). Clients only update when the version increases.
+- `version` lives only in the root `package.json` (the CLI imports it; esbuild inlines it).
 
 ## How work happens here
 
@@ -49,7 +46,7 @@ Rules for the layout:
 
 ## Stack
 
-- TypeScript (strict), ESM, Node ≥ 20 is the runtime floor for the plugin (bundle `--target=node20`); the dev floor is Node 22.12 (vitest 5). Tests: vitest. Bundler: esbuild → `plugins/vibe-breakpoint/scripts/vibe-breakpoint.mjs`.
+- TypeScript (strict), ESM, Node ≥ 20 is the runtime floor for the skill (bundle `--target=node20`); the dev floor is Node 22.12 (vitest 5). Tests: vitest. Bundler: esbuild → `skills/vibe-breakpoint/scripts/vibe-breakpoint.mjs`.
 - Docker Compose for the isolated environment. k6 runs as a container (`grafana/k6`) inside the test network, so users don't install k6.
 - Postgres with `pg_stat_statements` for query measurement.
 
@@ -57,13 +54,13 @@ Rules for the layout:
 
 ```bash
 npm install
-npm run build       # esbuild → plugins/vibe-breakpoint/scripts/
+npm run build       # esbuild → skills/vibe-breakpoint/scripts/
 npm test            # vitest (unit)
 npm run test:e2e    # runs fixtures in Docker (from Phase 1)
 npm run typecheck
 ```
 
-Local plugin test: add this repo as a marketplace in Claude Code and install the plugin from it (Phase 0 records the exact commands in `docs/decisions.md` after checking the current Claude Code docs).
+Local install test: `HOME=$(mktemp -d) npx skills add . --skill vibe-breakpoint -g -a claude-code -y`, or copy `skills/vibe-breakpoint` into `~/.claude/skills/`.
 
 ## Definition of done (every phase)
 

@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { isRealEnvFile } from "../../src/sandbox/copy.js";
 import { RUN_DIR_RE } from "../../src/sandbox/sandbox.js";
 
-const bundle = resolve("plugins/vibe-breakpoint/scripts/vibe-breakpoint.mjs");
+const bundle = resolve("skills/vibe-breakpoint/scripts/vibe-breakpoint.mjs");
 const dk = (...a: string[]) => spawnSync("docker", a, { encoding: "utf8" });
 const ids = (...a: string[]) => (dk(...a).stdout ?? "").split("\n").map((s) => s.trim()).filter(Boolean).sort();
 const runResources = (id: string) => [

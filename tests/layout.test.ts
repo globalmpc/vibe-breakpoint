@@ -5,39 +5,32 @@ import { parseScenario } from "../src/load/scenario.js";
 import { parseSeed } from "../src/seed/seed.js";
 
 const json = (p: string) => JSON.parse(readFileSync(p, "utf8"));
-const plugin = json("plugins/vibe-breakpoint/.claude-plugin/plugin.json");
-const market = json(".claude-plugin/marketplace.json");
-const entry = market.plugins[0];
+const pkg = json("package.json");
 
 describe("manifests", () => {
-  it("version and name match", () => {
-    expect(entry.version).toBe(plugin.version);
-    expect(entry.name).toBe(plugin.name);
+  it("package.json has a semver version", () => {
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("source resolves to the plugin dir", () => {
-    expect(entry.source.startsWith("./")).toBe(true);
-    expect(entry.source).not.toContain("..");
-    expect(existsSync(join(entry.source, ".claude-plugin/plugin.json"))).toBe(true);
-  });
-  it(".claude-plugin dirs hold only their manifest", () => {
-    expect(readdirSync("plugins/vibe-breakpoint/.claude-plugin")).toEqual(["plugin.json"]);
-    expect(readdirSync(".claude-plugin")).toEqual(["marketplace.json"]);
+  it("skill folder is self-contained (D-057)", () => {
+    expect(readdirSync("skills/vibe-breakpoint").sort()).toEqual(["SKILL.md", "assets", "references", "scripts", "templates"]);
+    expect(existsSync("plugins")).toBe(false);
+    expect(existsSync(".claude-plugin")).toBe(false);
   });
   it("SKILL.md has frontmatter", () => {
-    const s = readFileSync("plugins/vibe-breakpoint/skills/vibe-breakpoint/SKILL.md", "utf8");
+    const s = readFileSync("skills/vibe-breakpoint/SKILL.md", "utf8");
     expect(s).toMatch(/^---\n[\s\S]*?^name: vibe-breakpoint$[\s\S]*?^description:[\s\S]*?^---/m);
   });
 });
 
 describe("skill", () => {
-  const dir = "plugins/vibe-breakpoint/skills/vibe-breakpoint";
+  const dir = "skills/vibe-breakpoint";
   const skill = readFileSync(join(dir, "SKILL.md"), "utf8");
   it("SKILL.md lint", () => {
     expect(skill).toMatch(/^name: vibe-breakpoint$/m);
     expect(skill).toMatch(/^description:/m);
-    for (const t of ["${CLAUDE_PLUGIN_ROOT}/scripts/vibe-breakpoint.mjs", "inspect", "run", "--pull", "render", "cleanup", "run_in_background", "grafana/k6", "code-locations.md", "static-report.md", "No load test ran"]) expect(skill).toContain(t);
-    expect(skill).not.toMatch(/\$CLAUDE_PLUGIN_ROOT/);
-    for (const m of skill.matchAll(/\$\{CLAUDE_PLUGIN_ROOT\}\/([^\s"`)]+)/g)) expect(existsSync(join("plugins/vibe-breakpoint", m[1])), m[1]).toBe(true);
+    for (const t of ["${CLAUDE_SKILL_DIR}/scripts/vibe-breakpoint.mjs", "inspect", "run", "--pull", "render", "cleanup", "run_in_background", "grafana/k6", "code-locations.md", "static-report.md", "No load test ran"]) expect(skill).toContain(t);
+    expect(skill).not.toMatch(/CLAUDE_PLUGIN_ROOT|\$CLAUDE_SKILL_DIR/);
+    for (const m of skill.matchAll(/\$\{CLAUDE_SKILL_DIR\}\/([^\s"`)]+)/g)) expect(existsSync(join("skills/vibe-breakpoint", m[1])), m[1]).toBe(true);
     expect(skill.split("\n").length).toBeLessThan(200);
     expect(skill).not.toMatch(/\b(cat|source|less|head|tail|grep)\b[^\n]*\.env(?!\.(example|sample|template))/);
   });
@@ -54,7 +47,7 @@ describe("skill", () => {
 });
 
 describe("assets", () => {
-  const dir = "plugins/vibe-breakpoint/assets";
+  const dir = "skills/vibe-breakpoint/assets";
   it("holds exactly the expected files", () => {
     expect(readdirSync(dir).sort()).toEqual(["LiberationMono-Bold.ttf", "LiberationMono-LICENSE.txt", "LiberationMono-Regular.ttf", "THIRD-PARTY.md", "resvg-wasm-LICENSE.txt", "resvg.wasm"]);
   });

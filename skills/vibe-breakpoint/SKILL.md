@@ -5,7 +5,7 @@ description: Find how many users a web app can handle at the same time before it
 
 # /vibe-breakpoint
 
-Define once: `VB` = `node "${CLAUDE_PLUGIN_ROOT}/scripts/vibe-breakpoint.mjs"`. If the path above still contains the literal `${`, stop and tell the user the plugin path was not resolved.
+Define once: `VB` = `node "${CLAUDE_SKILL_DIR}/scripts/vibe-breakpoint.mjs"`. If the path above still contains the literal `${`, stop and tell the user the skill path was not resolved.
 `PROJECT` = absolute path of the git root (`git rev-parse --show-toplevel`), or the current directory if there is none.
 Run every command non-interactively.
 
@@ -22,7 +22,7 @@ Run `VB inspect PROJECT` and read the JSON it prints.
 - `docker.available` is false: follow **No-Docker path**, then stop.
 
 ## Step 2: Read the code, write the inputs
-Use `${CLAUDE_PLUGIN_ROOT}/skills/vibe-breakpoint/references/framework-notes.md` to find routes, auth and schema. Write `PROJECT/.vibe-breakpoint/scenario.json` and `seed.json` following `${CLAUDE_PLUGIN_ROOT}/skills/vibe-breakpoint/references/inputs.md`.
+Use `${CLAUDE_SKILL_DIR}/references/framework-notes.md` to find routes, auth and schema. Write `PROJECT/.vibe-breakpoint/scenario.json` and `seed.json` following `${CLAUDE_SKILL_DIR}/references/inputs.md`.
 If `has_scenario` / `has_seed` is true, reuse the existing file, say so, and do not overwrite it.
 
 ## Step 3: One message (questions and consent)
@@ -42,7 +42,7 @@ After the yes, run `VB run PROJECT --pull` with the Bash tool's `run_in_backgrou
 Never run `render` after a failed run.
 
 ## Step 5: Code locations
-Read `PROJECT/.vibe-breakpoint/out/result.json`, key `flags`. For each flag find the handler using `${CLAUDE_PLUGIN_ROOT}/skills/vibe-breakpoint/references/query-patterns.md`. Write `PROJECT/.vibe-breakpoint/code-locations.md` (overwrite every run):
+Read `PROJECT/.vibe-breakpoint/out/result.json`, key `flags`. For each flag find the handler using `${CLAUDE_SKILL_DIR}/references/query-patterns.md`. Write `PROJECT/.vibe-breakpoint/code-locations.md` (overwrite every run):
 
 ```
 ### <flag> - <endpoint>
@@ -59,7 +59,7 @@ Run `VB render PROJECT`. Reply in under 8 lines:
 - paths: `.vibe-breakpoint/out/report.md` and `.vibe-breakpoint/out/chart.png`.
 
 ## No-Docker path
-Read the code with `${CLAUDE_PLUGIN_ROOT}/skills/vibe-breakpoint/references/query-patterns.md` and write `PROJECT/.vibe-breakpoint/static-report.md`, starting exactly with:
+Read the code with `${CLAUDE_SKILL_DIR}/references/query-patterns.md` and write `PROJECT/.vibe-breakpoint/static-report.md`, starting exactly with:
 
 ```
 # vibe-breakpoint static report (no load test): <project name>

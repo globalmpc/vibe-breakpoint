@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const server = resolve("plugins/vibe-breakpoint/templates/mock/server.mjs");
+const server = resolve("skills/vibe-breakpoint/templates/mock/server.mjs");
 const procs: ChildProcess[] = [];
 
 async function start(latency = "0"): Promise<string> {

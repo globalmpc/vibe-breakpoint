@@ -13,9 +13,9 @@ describe("README (spec §12)", () => {
   it.each(["## Install", "## What it measures", "## What it never touches", "## Requirements", "## How the breaking point is defined", "## Server profiles", "## Limits", "## Cleanup", "## License", "vibe-preflight", "vibe-bill"])("has %s", (s) => {
     expect(readme).toContain(s);
   });
-  it("install commands match D-014", () => {
-    expect(readme).toContain("claude plugin marketplace add");
-    expect(readme).toContain("claude plugin install vibe-breakpoint@vibe-breakpoint");
+  it("install commands (D-057)", () => {
+    expect(readme).toContain("npx skills add globalmpc/vibe-breakpoint");
+    expect(readme).not.toMatch(/marketplace|install\.sh/);
   });
   it("ships a licence file", () => expect(existsSync("LICENSE")).toBe(true));
 });

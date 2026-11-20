@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const bundle = resolve("plugins/vibe-breakpoint/scripts/vibe-breakpoint.mjs");
-const version = JSON.parse(readFileSync("plugins/vibe-breakpoint/.claude-plugin/plugin.json", "utf8")).version;
+const bundle = resolve("skills/vibe-breakpoint/scripts/vibe-breakpoint.mjs");
+const version = JSON.parse(readFileSync("package.json", "utf8")).version;
 const run = (...args: string[]) => spawnSync("node", [bundle, ...args], { cwd: tmpdir(), encoding: "utf8" });
 
 describe("cli bundle", () => {
