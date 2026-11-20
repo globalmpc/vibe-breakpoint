@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "flow": [
+    { "name": "login", "method": "POST", "path": "/api/login", "body": { "email": "{{user.email}}", "password": "{{user.password}}" }, "save": { "cookie": true } },
+    { "name": "projects", "method": "GET", "path": "/api/projects" },
+    { "name": "search", "method": "GET", "path": "/api/users?email={{random.email}}" },
+    { "name": "feed", "method": "GET", "path": "/api/feed" }
+  ],
+  "think_time_s": 1,
+  "probe_endpoints": ["projects", "search", "feed"]
+}

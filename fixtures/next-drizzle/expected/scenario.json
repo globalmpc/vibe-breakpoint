@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "flow": [
+    { "name": "projects", "method": "GET", "path": "/api/projects" },
+    { "name": "search", "method": "GET", "path": "/api/users?email={{random.email}}" }
+  ],
+  "think_time_s": 1,
+  "probe_endpoints": ["projects", "search"]
+}

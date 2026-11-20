@@ -1,0 +1,12 @@
+{
+  "name": "vibe-breakpoint",
+  "version": "0.1.0",
+  "description": "Find how many users your vibe-coded app can handle before it breaks, and which database queries slow it down as data grows. Tests an isolated copy of your app and never touches your project.",
+  "author": {
+    "name": "Rickard Elsen"
+  },
+  "homepage": "https://github.com/globalmpc/vibe-breakpoint",
+  "repository": "https://github.com/globalmpc/vibe-breakpoint",
+  "license": "MIT",
+  "keywords": ["vibe-coding", "load-testing", "stress-testing", "performance-testing", "n-plus-one", "postgresql", "docker"]
+}

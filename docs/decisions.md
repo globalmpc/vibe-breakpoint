@@ -1,0 +1,140 @@
+# vibe-breakpoint — Decisions
+
+Append new decisions as `D-0NN`. Don't rewrite old ones; supersede with a new entry.
+
+## Decided
+
+**D-001 — Form and layout.** Claude Code plugin distributed through a marketplace in this repo: root `.claude-plugin/marketplace.json`, plugin in `plugins/vibe-breakpoint/`. TypeScript source at repo root, bundled into the plugin's `scripts/`.
+*Why:* standard marketplace layout; users receive only the plugin folder, not source, tests or fixtures; the same layout fits a shared marketplace with vibe-preflight and vibe-bill later.
+
+**D-002 — Project never modified.** Tests run on a temporary copy; all needed changes (Dockerfile, splitting backend, client patches) happen in the copy. No revert step exists because nothing in the project changes.
+*Why:* a revert at the end fails if the run is killed; a copy can't leave the project half-changed.
+
+**D-003 — Own compose, core only, throwaway database.** Separate compose project per run with `app`, `db`, `mock`, `k6`; Postgres on tmpfs; generated credentials; no connection to any database from the user's config.
+*Why:* fake data must never reach the user's databases or disk.
+
+**D-004 — No outside calls.** `internal` Docker network at runtime; AI, payment and email services pointed at a bundled mock server; real `.env` values never used.
+*Why:* a load test must not cost money, send emails or hit rate limits on real accounts.
+
+**D-005 — Two dials.** Concurrent users (ramp to breaking point) and data size (S/M/L seeded data, query probe).
+*Why:* N+1 and missing-index problems are invisible on small dev databases.
+
+**D-006 — k6 as a container.** Load engine is k6 run from the `grafana/k6` image inside the test network.
+*Why:* trusted engine, JavaScript scenarios, and users don't install a binary.
+
+**D-007 — Docker required for measurement.** Without Docker, only the static query report is produced, clearly labelled. *Supersedes the plan document's "run on the user's machine without Docker" fallback.*
+*Why:* without containers there is no throwaway database, so a run would put fake data into a real one (conflicts with D-003).
+
+**D-008 — Production builds only**, on a fixed server profile (`small` default), printed on every result.
+
+**D-009 — v0.1 scope:** Node backends (Next.js, Express-style) with a direct Postgres connection (Prisma, Drizzle, Knex, pg). Supabase/Firebase client-API apps, non-Node backends and staging URLs come later.
+
+**D-010 — Development workflow:** `/phase` runner, existing agents analis → implementer → reviewer (+ tester), max 3 review rounds, routine commands without confirmation, never push.
+
+**D-014 — Local install and validation commands.** Checked against the current Claude Code docs (2026-11-19). Manifests needed no change; only a top-level `description` was added to `marketplace.json` to silence a `validate` warning.
+```
+claude plugin validate .
+claude plugin validate plugins/vibe-breakpoint
+claude plugin marketplace add /abs/path/to/this/repo
+claude plugin install vibe-breakpoint@vibe-breakpoint
+```
+After edits, `/reload-plugins` picks up changes without a version bump. Plugin skills are namespaced: the documented command is `/vibe-breakpoint:vibe-breakpoint`; bare `/vibe-breakpoint` works when no other command has that name. `${CLAUDE_PLUGIN_ROOT}` is substituted inside SKILL.md text but is not set as an env var for shell commands, so Phase 7 writes the literal path in the SKILL.md body.
+*Why:* the plan asked Phase 0 to record the exact commands.
+
+**D-015 — One version source.** `plugins/vibe-breakpoint/.claude-plugin/plugin.json` is the only place the version is edited by hand (besides the marketplace entry, which a test keeps equal). The CLI imports it as JSON and esbuild inlines it into the bundle; the root `package.json` has no `version`.
+*Why:* removes a third place to drift, and needs no build script.
+
+**D-016 — test.env value rules.** First matching rule wins: `NODE_ENV=production`, `PORT=3000`, `HOST/HOSTNAME=0.0.0.0`, `NEXTAUTH_URL/AUTH_URL=http://app:3000`; `PG*` -> test DB parts; `DIRECT_URL` or `*_URL/_URI` with a DATABASE/POSTGRES/PG/DB token -> test DB URL; `OPENAI_BASE_URL` -> `http://mock:4010/v1`; other `*_BASE_URL` -> mock; known service keys (matched by suffix, so `NEXT_PUBLIC_` works) -> fake key in the service format; `*SECRET*`, `JWT_*`, `*_KEY/_TOKEN/_PASSWORD` -> random 32-byte hex; other `*_URL/_URI` -> mock; else placeholder. `NODE_ENV, PORT, DATABASE_URL, OPENAI/ANTHROPIC/RESEND_BASE_URL` are always set.
+*Why:* spec §3 would set `PORT`/`NODE_ENV` to a placeholder and the app could not start.
+
+**D-017 — Compose shape.** The file is JSON (`compose.json`; compose accepts it, no YAML emitter). `k6` sits behind compose profile `load`. `up` uses `--pull never`: the CLI never pulls implicitly; pulling/building is an explicit consented step (Phase 2/7). `init: true` on node services. Mock listens on port 4010.
+
+**D-018 — Teardown and cleanup.** `down` and `cleanup` share label-based removal (`docker rm -fv`, then networks, then volumes) plus temp-dir removal, so no compose file is needed. `cleanup` skips runs whose owner pid (`<tmp>/vibe-breakpoint-<id>/pid`) is alive; `--all` removes everything. Temp dirs match only `^vibe-breakpoint-vb-\d{14}-[0-9a-f]{4}$`. Run ids from Docker labels are validated against `^vb-\d{14}-[0-9a-f]{4}$` before any removal (a crafted label must never reach `rmSync`). Ceiling: pid reuse can make a dead run look alive; `--all` handles that.
+
+**D-019 — Phase 1 `run` and `--hold`.** Until boot exists, `run` = copy, env, compose, up, print `vibe-breakpoint: sandbox ready <runId>`, down. Hidden `--hold` keeps the sandbox up until a signal (test and debug hook).
+
+**D-020 — Copy excludes match by basename at any depth** (monorepos: `packages/*/node_modules`, `apps/web/.env.local`), never the project root. Ceiling: a source folder literally named `build`/`dist` is dropped. Upgrade path: root-only list for build outputs.
+
+**D-021 — App image build and consent.** `docker compose build app` with network before `up`; runtime only `vb-net`; `up --pull never --no-build`. Image `vb-app:<runId>` with run labels, removed by `down`/`cleanup`. The CLI announces the build source and required images; missing images are pulled only with `--pull` (the skill passes it after the user's consent), otherwise exit 1 with the list. BuildKit cache is kept (ceiling: disk use across runs; upgrade: `docker builder prune --filter label=...` in `cleanup`).
+
+**D-022 — One single-stage Dockerfile template** (`templates/dockerfiles/node.Dockerfile`) for Next.js and Node. It keeps devDependencies so migration CLIs work offline at runtime, and sets `NEXT_TELEMETRY_DISABLED=1`. Supersedes spec §5 "`{nextjs,node}` multi-stage". The project's own root `Dockerfile` is used unchanged. The template is referenced by absolute path from `build.dockerfile` (compose accepted it outside the context). Ceilings: alpine/musl native deps, npm only (pnpm/yarn lockfiles ignored), no env at build time. Upgrade when a real repo fails (Phase 8).
+
+**D-023 — Start/build detection and exit codes.** Build = `npm run build` if a build script exists, else `next build` for Next.js, else none. Start = `npm run start` unless the start script is dev-like; then `next start` (Next.js), `node <main>`, or the first existing of `server.js, index.js, app.js, src/server.js, src/index.js`. Exit 2 = unsupported.
+
+**D-024 — Migrations.** Detection order: Prisma, Drizzle, Knex, raw SQL (`migrations/` or `db/migrations/`, `*.sql` except `*.down.sql`, lexicographic). ORM CLIs run in a one-off `app` container from the built image; raw SQL is piped into `db` via psql, one transaction per file. Drizzle without `<out>/meta/_journal.json` runs `drizzle-kit push` (next-drizzle has no migrations folder). Prisma without `prisma/migrations` runs `prisma db push --skip-generate`. Nothing detected: warning line, continue.
+
+**D-025 — Health and failure output.** Compose healthcheck via `node -e fetch` (status < 500), path from the first scenario route or `/`, `--wait-timeout 120`. Failure messages carry the last 30 lines with every test.env value of 8 or more characters replaced by `[redacted]`. Ceiling: images without `node` on PATH (distroless) fail the health check.
+
+**D-026 — Mock server contract.** Spec §6 endpoints plus internal `/__vb/health` and `/__vb/log` (not logged), `MOCK_LATENCY_MS`, `MOCK_PORT`. Log entries are `{service, method, path, count}`; the path has no query string and the log has no bodies. The CLI writes `out/mock-log.json` before teardown, also on signal. No streaming (SSE) responses in v0.1.
+
+**D-027 — Copy keeps only safe symlinks** (relative, resolving inside the project, not to a real env file), with `verbatimSymlinks: true`. The copy source is the realpath of the project root. Closes R1-2.
+
+**D-028 — Seeding runs through `run`.** If `<project>/.vibe-breakpoint/seed.json` exists (read from the real project; the copy excludes the folder) it is validated before Docker. After migrations and before the app starts, each `--sizes` size (default `S,M,L`) is seeded in order, one transaction each: TRUNCATE ... RESTART IDENTITY CASCADE, INSERT ... SELECT from `generate_series`, ANALYZE. Prints `vibe-breakpoint: seeded <size> in <ms> ms <json [{table,rows,checksum}]>`. The DB keeps the last size. No seed.json: seeding skipped.
+
+**D-029 — Determinism without `random()`.** Each value uses `h = (i*2654435761 + c) mod 2^32`, `c` = FNV-1a-32 of `seed:table:column[:k]`, computed in TS. FK values index the ref table's `array_agg(id ORDER BY id)` (any id type; ref table listed earlier). Checksum = `count(*)` and `md5(string_agg(row::text,'|' ORDER BY row::text))` over the columns the seeder writes; DB-defaulted columns such as `created_at` are excluded.
+
+**D-030 — Unlisted columns get DB default or NULL** (deviation from spec §7 "type-based defaults"), because implicit values could break FK/UNIQUE/length constraints. Type-based values only via explicit `{"gen":"auto"}`. Unlisted NOT NULL without default stays a validation error naming the column.
+
+**D-031 — Passwords: bcrypt only, via pgcrypto `crypt()`.** One hash per size with a deterministic salt from `random_seed`; `cost` from seed.json (default 10). Every row of that table shares the hash. Test users are rows 1..`test_users` of the table with the `password_hash` column (email `user<i>@example.test`, password `plain`). `test_users` is optional.
+
+**D-032 — Fixture seed files** live at `fixtures/<name>/expected/seed.json`; the e2e copies them to `<temp copy>/.vibe-breakpoint/seed.json` (fixtures never get a `.vibe-breakpoint/` folder).
+
+**D-033 — Breaking-point rule confirmed (was D-012).** Broken = p95 > 2000 ms or error rate > 1 % (both strict) or zero requests (error_rate 1). Breaking point = first broken stage; `users_ok` = previous stage or 0; `null` = no break; reason is `p95`, `error_rate` or `p95_and_error_rate`. Confirmed on express-pg: the `pg_sleep(1)` endpoint gives p95 about 1.0 s at 5 users (ok) and about 5.2 s at 40 users (broke); the healthy search gives p95 3-17 ms at 5 and 40 users.
+
+**D-034 — k6 runner.** One static script `templates/k6/load.js` (no codegen); config as JSON in `-e VB_CONFIG`, script on stdin (`k6 run -`), summary back as a `VB_SUMMARY` stdout line from `handleSummary` (the run dir is 0700, so no bind mounts). One `compose run --rm --no-deps -T k6` container per stage (`constant-vus`), so each stage has its own summary and stats window. `noCookiesReset: true`; login steps (`save.cookie`) run once per VU per stage. `K6_NO_USAGE_REPORT=true`. Base URL is the constant `http://app:3000`. Ceiling: bcrypt login at high VU counts adds to that stage's latency.
+
+**D-035 — Resource stats.** `docker stats --no-stream` of app and db is sampled in a loop while the stage runs. CPU is stored as a fraction of the profile limit (1.0 = saturated), memory as the max of app MiB. Limiting resource is evaluated on the breaking stage: the highest of app CPU, db CPU, app memory/limit that is >= `SATURATED` 0.85, else `app_code`; `null` without a break or without samples. `MEM_MB` lives in `compose.ts` next to `PROFILES` (not inside it, because tests pin the `PROFILES` shape). Ceiling: a sample takes about 2 s, so short stages get few samples (healthy run showed app cpu 0.96 at 40 users while no break occurred).
+
+**D-036 — Ramp flags.** `--stages` (default `10,25,50,100,200,400`; ints 1..1000, strictly ascending) and `--stage-duration` (default 60; 1..600 s), validated before Docker. The ramp runs on size `M` (reseeded if `M` was seeded but not last; otherwise the last seeded size; `size: null` without a seed). No `scenario.json` means the load test is skipped and `grafana/k6` is not required. With a scenario, `grafana/k6` joins the image list, so it goes through the usual `--pull` consent path (D-021). Raw per-stage metrics are written to `out/k6/<users>.json`.
+
+**D-037 — Probe requests via one-off k6.** Probe traffic runs in a one-off `grafana/k6` container on `vb-net` (`templates/k6/probe.js`, one script with `mode` `prep` or `run`). Per size, a prep run logs in (`setup()`) and warms each probed endpoint once. Per endpoint: `pg_stat_statements_reset()`, then a k6 run with the prep cookies, 1 VU, 5 sequential requests, 120 s timeout. Login is never inside the measured window, so no query-text matching is needed to exclude it. `{{random.email}}` is deterministic in the probe so timings compare across sizes. A failed warm-up aborts the run; a failed measured run only skips that endpoint and size. Ceiling: cookies travel in `VB_CONFIG` on the docker command line (same as `runStage`), visible in the process list while k6 runs; the session only exists in the sandbox.
+
+**D-038 — Probe numbers.** `pg_stat_statements` lives in schema `vb_probe`, created after migrate (so the app's schema listing stays clean); if a migration already created it elsewhere that schema is used. Only `toplevel` rows of the test database, minus the tool's own statements (`pg_stat_statements`, EXPLAIN/ANALYZE/SET/SHOW/DISCARD/RESET, `select $1`), grouped by `queryid`. `queries_per_req = Σcalls/N`, `db_ms_per_req = Σtotal_exec_time/N`, `rows_per_req = Σrows/N` with N = 5 (database rows, not response size; bodies are discarded). `top_queries[]` = top 5 by total time, `{query, calls_per_req, mean_ms, rows_per_req}`, text redacted and at most 500 characters. Endpoint key = `METHOD path-without-query` (` (<step name>)` appended on collision). Refines spec §9.1.
+
+**D-039 — Flag rules.** All flags compare S and L and need a non-zero S value. `n_plus_one`: queries/req ratio >= 3. `missing_index`: per-query mean time ratio >= 5 AND `EXPLAIN (GENERIC_PLAN, VERBOSE, FORMAT JSON)` at L (after ANALYZE, SELECT/WITH only, never executed, never with ANALYZE) shows a Seq Scan with a Filter on a relation with `reltuples >= 10000`. `unbounded_fetch`: with `g = sizes.L / sizes.S >= 2`, rows/req ratio >= 0.5 x g (so S 1000 / L 100000 needs 50x). Missing S or L in `--sizes` means no flags and a skip line. Query and filter text in flags are redacted. Refines spec §9.2 "roughly". Note: `GET /api/projects` on express-pg is correctly both `n_plus_one` and `unbounded_fetch`. A probed login step would earn `missing_index` (unindexed email lookup), so fixture scenarios do not probe it.
+
+**D-040 — Run order with the probe.** The app starts before seeding. Each size is seeded and then probed in `--sizes` order; `--hold` waits after the size loop. `result.json` is written after the probe (`stages: []`) and again after the ramp; `probe` and `flags` keys are always present. Probing needs seed.json, scenario.json and a non-empty `probe_endpoints`, with skip lines otherwise. Measured on express-pg (S 1000 / M 4000 / L 40000, users x0.5): `/api/projects` 1001 -> 40001 queries/req, 3.0 -> 146 ms; `/api/users` 0.1 -> 1.2 ms (Seq Scan flagged; 0.0 ms with an index); `/api/feed` 1000 -> 40000 rows/req.
+
+**D-041 — App healthcheck probes only during boot.** The app healthcheck uses `interval: 24h`, `start_period: 120s`, `start_interval: 1s`, `timeout: 5s` and no `retries`. Docker probes every second until the app is healthy. After that, no healthcheck request reaches the app during the probe or load windows. `pg_stat_statements` has no per-client column, and the health request hits the first scenario route, which has the same `queryid`s, so its queries cannot be filtered out afterwards. `depends_on: service_healthy` and `up --wait --wait-timeout 120` are unchanged. Rejected alternatives: a second compose file or `healthcheck.disable` after boot (recreates the app container), and subtracting the queries (impossible). Ceilings: needs Docker Engine 25+ and Compose 2.20.2+ (`start_interval`); an older engine fails boot after 120 s, and the error message names the requirement. A run longer than 24 h gets one probe per 24 h. Upgrade path: CLI-side readiness polling (`compose exec app node -e fetch` in a loop) without a compose healthcheck. The `db` (`pg_isready`, runs no SQL) and `mock` healthchecks stay as they are. Refines D-025.
+
+**D-042 — PNG (confirms D-011).** `@resvg/resvg-wasm` 2.6.2, an exact-pinned devDependency. The glue is bundled by esbuild; `npm run build` copies the wasm to `plugins/vibe-breakpoint/assets/resvg.wasm` (committed). At runtime the wasm is read from the plugin's `assets/`, fonts go in via `fontBuffers`, and `initWasm` runs once per process. Verified: it initialises in Node from the bundle; the bundle stays 95 KB and `--version` takes about 40 ms. A PNG failure is non-fatal (`PNG skipped: ...`, exit 0); the SVG is the source of truth. Rejected: inlining the wasm with esbuild's binary loader (+3.3 MB parsed by every command).
+
+**D-043 — Font.** Liberation Mono Regular and Bold (OFL 1.1), unmodified and never subset (Reserved Font Name rule), licence shipped verbatim. Layout assumes a 0.6 em advance. The SVG names `Liberation Mono, monospace`. The MPL-2.0 text for resvg-wasm is shipped with a source notice; see `assets/THIRD-PARTY.md`.
+
+**D-044 — Chart layout and privacy.** 1080x1350; sections as in spec §9.3; chart sources limited to numbers, endpoint keys and flag kinds; no run id or dates; worst endpoint = highest `db_ms_per_req` at its largest size, ties by key; project label is the sanitised basename (max 22 chars); the repo URL is one constant (`REPO_URL`, O-1).
+
+**D-045 — `mocked_calls`.** Not stored in result.json (refines spec §9.1). `render` derives it from `out/mock-log.json`.
+
+**D-046 — Report.** Fixed headings (spec §9.4). Code locations and patches come from an optional `.vibe-breakpoint/code-locations.md` written by the skill: included verbatim, regular files only. Data sizes come from `seed.json`. Fix prompts are templated per flag kind. Deterministic: same inputs, same bytes.
+
+**D-047 — Render input safety.** Inputs are read only as regular non-symlink files. Parse errors are never echoed. Fixed error messages, exit 1.
+
+**D-048 — `inspect` contract.** `inspect <project>` writes `<project>/.vibe-breakpoint/inspect.json` via `safeWriteOut` and prints the same JSON. Keys: `schema, tool_version, docker{available,reason}, supported, unsupported_reason, framework, dockerfile, migrations, db_deps, env_names, images, missing_images, has_scenario, has_seed`. Env **names** only. Docker missing or an unsupported project is data (exit 0); exit 1 only for project-not-found or a refused write. Parse errors are never echoed. The image list is shared with `run` (`requiredImages`) plus `grafana/k6`. Refines spec §1.
+
+**D-049 — No-Docker path (refines D-007).** With `docker.available:false`, Claude writes `.vibe-breakpoint/static-report.md` from reading the code with `references/query-patterns.md`. It starts with a fixed label (`static report (no load test)`, `No load test ran because <reason>`) and contains no measured-looking numbers. No CLI command, because nothing can be measured. Ceiling: content quality depends on Claude. Upgrade: a CLI template if real reports drift.
+
+**D-050 — Skill paths and examples.** SKILL.md refers to plugin files only via the braced `${CLAUDE_PLUGIN_ROOT}` token (substituted at skill load, D-014), never bare `$CLAUDE_PLUGIN_ROOT`. Fixtures are not shipped, so scenario/seed examples live in `references/inputs.md`. A unit test parses them with `parseScenario`/`parseSeed` so they cannot drift.
+
+**D-051 — One user turn and background run.** The question batch and the consent go in one message. After a yes, the skill runs `run --pull` in the background (default stages can exceed the Bash tool's 10-minute limit). Validation errors in `scenario.json`/`seed.json` (before Docker) allow one fix-and-rerun without asking again; other failures are explained, not retried. Reusing existing `scenario.json`/`seed.json` is the default.
+
+**D-052 — No SDK client patching in v0.1.** Spec §3 "the skill patches the client in the copy" is deferred: the copy is created and built inside one `run` process, so there is no step where the skill could edit it. Calls from SDKs without a base-URL env setting fail on the offline network. The report/reply names them under limits. Upgrade path: a `--patch <file>` hook applied to the copy before build.
+
+**D-053 — O-1 resolved.** Owner confirmed on 2026-11-19: `github.com/globalmpc/vibe-breakpoint` is the right chart URL (`REPO_URL`), even though `git remote` points at `mustcompany/vibe-breakpoint-private`.
+
+**D-054 — Compose build without bake.** `buildApp` sets `COMPOSE_BAKE=false`. Docker Compose 5.x builds through bake by default, and bake refuses the template Dockerfile that lives outside the build context (D-022) with "additional privileges requested: --allow=fs.read=...". Found when running the README example on a machine with Compose 5.6.0; the e2e had not hit it before. Ceiling: depends on Compose honouring the variable (it does in 2.x-5.x). Upgrade path: copy the template into the app copy instead.
+
+**D-055 — Release 0.1.0.** Both manifests are `0.1.0`; local tag `v0.1.0` on the Phase 8 commit, never pushed by the tool. `LICENSE` is MIT, matching the manifests (D-013 still waits for the owner). The README chart is a real short run, labelled as such in the README. O-3 (public repos) is not done: the owner has not chosen any.
+
+**D-056 — PR #1 review round 3.** Fixed: B1 error rate is classified unrounded (`raw_error_rate` is carried on the in-memory stage and stripped from `result.json`, which keeps 4 decimals); B2 `seed.json`/`scenario.json` are read only as regular non-symlink files and JSON.parse messages are replaced by a fixed `invalid JSON`; B3 `.npmrc` (any depth, and symlinks to it) is not copied into the sandbox (ceiling: projects that need a private registry will not build, see D-009); B4 probe cookies are collected for the base URL and every flow step path, restored with `path: "/"` once per VU, and in prep mode exported after the warm-up (one `VB_COOKIES` stderr line, `--log-format raw`, never printed); B5 probe control queries (stats reset/read, ANALYZE, EXPLAIN) run without `psql -1` and `keep()` also drops `begin`/`commit`; B6 `explainCandidates` allows one trailing `;` (stripped); B7 dev `engines.node` is `^22.12.0 || ^24.0.0 || >=26.0.0` (vitest 5), the plugin runtime floor stays Node 20. B8 (zero-request ordering) was already correct. Also: mock embeddings input capped at 2048, mock `mem_limit` 256m. Deferred: `npm ci` lifecycle hooks run before sources are copied (ceiling of D-022; upgrade path: copy sources first); extension schema quoting in `src/cli.ts` (rare). Dismissed: biome `noConstructorReturn` on the bundled resvg-wasm glue (generated code, no biome config in the repo).
+
+## Proposed (confirm or replace in the named phase)
+
+**D-011 — PNG rendering:** confirmed as D-042.
+
+**D-013 — License MIT.** *Owner confirms before Phase 8.*
+
+## Open items (owner)
+
+- **O-1 — Repo owner. RESOLVED (D-053, 2026-11-19).** Manifests use `github.com/globalmpc/vibe-breakpoint` and author "Rickard Elsen". Confirm or change before Phase 6 (the URL goes on the chart).
+- **O-2 — Shared marketplace.** Keep this repo's own marketplace, and/or list the plugin in a shared marketplace with vibe-preflight and vibe-bill. Needed before Phase 8.
+- **O-3 — Public repos for real runs** (NOT DONE in Phase 8, still open) in Phase 8 (2–3, owner's choice; results shared only anonymised).

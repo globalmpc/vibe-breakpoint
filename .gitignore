@@ -1,0 +1,21 @@
+node_modules/
+coverage/
+.DS_Store
+
+# real env files never committed (fixtures use FAKESECRET_ values and are allowed)
+.env
+.env.*
+!.env.example
+!fixtures/**/.env
+
+# outputs when run on fixtures
+.vibe-breakpoint/
+fixtures/**/.vibe-breakpoint/
+
+# agent handoff notes stay local
+.claude/work/*
+!.claude/work/.gitkeep
+.claude/settings.local.json
+
+# agent memory notes stay local
+.claude/agent-memory/

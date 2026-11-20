@@ -1,0 +1,12 @@
+{
+  "framework": "nextjs",
+  "orm": "drizzle",
+  "env_names": ["DATABASE_URL", "NEXTAUTH_SECRET", "NEXT_PUBLIC_APP_NAME"],
+  "flags": {
+    "must_include": [
+      { "endpoint": "GET /api/projects", "flag": "n_plus_one" },
+      { "endpoint": "GET /api/users", "flag": "missing_index" }
+    ],
+    "no_flags": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "framework": "express",
+  "orm": "pg",
+  "env_names": ["DATABASE_URL", "JWT_SECRET", "LOG_LEVEL", "OPENAI_API_KEY", "PORT", "STRIPE_SECRET_KEY"],
+  "flags": {
+    "must_include": [
+      { "endpoint": "GET /api/projects", "flag": "n_plus_one" },
+      { "endpoint": "GET /api/users", "flag": "missing_index" },
+      { "endpoint": "GET /api/feed", "flag": "unbounded_fetch" }
+    ],
+    "no_flags": ["POST /api/login", "POST /api/summary"]
+  }
+}

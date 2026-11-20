@@ -1,0 +1,7 @@
+{
+  "name": "fixture-express-pg",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node src/server.js" },
+  "dependencies": { "bcryptjs": "^2.4.3", "express": "^4.19.2", "openai": "^4.52.0", "pg": "^8.11.5" }
+}

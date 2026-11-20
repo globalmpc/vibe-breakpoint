@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "random_seed": 42,
+  "main_table": "projects",
+  "sizes": { "S": 1000, "M": 10000, "L": 100000 },
+  "tables": [
+    { "name": "users", "ratio": 0.1, "columns": {
+        "email": { "gen": "email" },
+        "password_hash": { "gen": "password_hash", "algo": "bcrypt", "plain": "vb-test-password" },
+        "name": { "gen": "auto" } } },
+    { "name": "projects", "ratio": 1, "columns": {
+        "owner_id": { "gen": "fk", "ref": "users.id" },
+        "name": { "gen": "words", "count": 3 } } }
+  ],
+  "test_users": 50
+}
