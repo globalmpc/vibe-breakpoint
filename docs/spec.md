@@ -22,7 +22,7 @@ vibe-breakpoint cleanup  [--all]                # remove labelled resources + te
 vibe-breakpoint --version
 ```
 
-**`inspect <project>` (Phase 7).** Writes `<project>/.vibe-breakpoint/inspect.json` via `safeWriteOut` and prints the same JSON. Keys: `schema, tool_version, docker{available,reason}, supported, unsupported_reason, framework, dockerfile, migrations, db_deps, env_names, images, missing_images, has_scenario, has_seed`. Docker missing or an unsupported project is data (exit 0); exit 1 only for `project not found` or a refused write. See D-048.
+**`inspect <project>` (Phase 7).** Writes `<project>/.vibe-breakpoint/inspect.json` via `safeWriteOut` and prints the same JSON. Keys: `schema, tool_version, docker{available,reason}, supported, unsupported_reason, framework, dockerfile, migrations, db_deps, env_names, images, missing_images, has_scenario, has_seed, build, start, start_source, has_run` (plus `run_json_error` when run.json is invalid, and `run_json_can_fix: true` when only a missing or dev-like start blocks the run; D-068). Docker missing or an unsupported project is data (exit 0); exit 1 only for `project not found` or a refused write. See D-048.
 
 **`render <project>` (Phase 6).** Reads `<project>/.vibe-breakpoint/out/result.json` (regular file only, never a symlink; errors never echo file content, D-047), plus optional `out/mock-log.json`, `seed.json` (sizes only) and `code-locations.md`. Writes `out/chart.svg`, `out/chart.png`, `out/report.md` via `safeWriteOut`. A PNG failure prints `PNG skipped: <reason>` and still exits 0. Missing/invalid input exits 1 with a fixed message.
 
@@ -44,13 +44,17 @@ Hidden `--hold` keeps it up until SIGINT/SIGTERM/SIGHUP (exit 130/143/129). See 
 
 ## 3. Sandbox copy & test env
 
-**Copy excludes** (matched by basename at any depth, never the root; D-020): `.git/`, `node_modules/`, `.next/`, `dist/`, `build/`, `.turbo/`, `.vercel/`, `coverage/`, `.vibe-breakpoint/`, `.npmrc` (may hold registry tokens; D-056), and every `.env*` except `.env.example` / `.env.sample` / `.env.template`. Symlinks that resolve to `.npmrc` or a real env file are dropped too.
+**Copy excludes** (matched by basename at any depth, never the root; D-020): `.git/`, `node_modules/`, `.next/`, `dist/`, `build/`, `.turbo/`, `.vercel/`, `coverage/`, `.vibe-breakpoint/`, and every `.env*` except `.env.example` / `.env.sample` / `.env.template`. Secret files are dropped by name, case-insensitive, at any depth (D-056, D-061): `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.netrc`, `_netrc`, `.pgpass`, `.git-credentials`, `.dev.vars`, `.dev.vars.*`, `credentials.json`, `serviceAccountKey.json`, `id_rsa|dsa|ecdsa|ed25519` (not `.pub`), `*.pem|key|p12|pfx|jks|keystore|ppk`, `*service-account*.json`, `*serviceaccount*.json`, `client_secret*.json`, `*firebase-adminsdk*.json`. Symlinks that resolve to one of these or a real env file are dropped too. Ceiling: by name only.
 
 **Env names** (`src/sandbox/env-names.ts`, the only module allowed to touch real env files):
 1. `.env.example` / `.sample` / `.template` names.
 2. Code references: `process.env.X`, `process.env["X"]`, `import.meta.env.X`, `os.environ["X"]`, `os.getenv("X")`.
 3. Config files: env keys in `docker-compose*.yml`, `vercel.json`, `netlify.toml`.
 4. Real `.env*`: parse in-process, keep names, discard values. Never logged, returned or written.
+
+**`run.json`** (optional, `.vibe-breakpoint/run.json`, agent-written, D-068): `{ "build": argv|null, "start": argv, "env_names": [names] }`, all optional, no other keys. argv: 1 to 12 tokens of at most 120 chars, first token `node|npm|pnpm|yarn` (no `npx`; no `exec`/`dlx`/`x`/`create`, registry/config flags, or node `-e`/`-p`/`-r`/`--import`/`--loader`) or `node_modules/.bin/...`, tokens match `[\w@%+=:,./-]+`, no `..`, no leading `/`. `env_names`: up to 50 names, names only, merged with the scanned names before `test.env` is generated. Read from the original project (regular non-symlink file); errors are `run.json: ...`, exit 1 before Docker. `build`/`start` override detection on the template path and are ignored when the project Dockerfile is used; `env_names` always apply.
+
+**Build-time env** (D-067): on the template path `test.env` is also a BuildKit secret (`vbenv`, compose top-level `secrets` + `build.secrets`) loaded only inside the build `RUN`; never in a layer, history or the image env. Project Dockerfiles get no build secret.
 
 **`test.env` values:**
 - DB names (`DATABASE_URL`, `POSTGRES_URL`, …) → test DB URL.
@@ -78,10 +82,12 @@ Services (all labelled, network `vb-net` with `internal: true`):
 
 ## 5. App boot
 
-- Dockerfile: the copy's own root `Dockerfile` if present, unchanged; else the one template `templates/dockerfiles/node.Dockerfile` (single stage, keeps devDependencies; D-022). No `nextjs.Dockerfile`.
+- Dockerfile: the copy's own root `Dockerfile` if present and it does not `COPY`/`ADD` (without `--from`) a skipped dir such as `dist/` from the host (D-059; `run` prints one line naming the dir); else the one template `templates/dockerfiles/node.Dockerfile` (single stage, keeps devDependencies; D-022). The template installs from the lockfile: `pnpm-lock.yaml` (corepack pnpm, `--frozen-lockfile`), `yarn.lock` (corepack yarn, `--frozen-lockfile`), `package-lock.json` (`npm ci`), else `npm install` (D-060). No `nextjs.Dockerfile`.
+- Start command: when that fallback applies and nothing else yields one (no usable start script, `main` or entry file), a single-line exec-form `CMD`/`ENTRYPOINT` of `node <path>` in the project Dockerfile is mapped through its host-dir `COPY` (`COPY dist/api api` + `node api` runs `node dist/api`); `run` prints one line (D-063).
 - Build: `npm run build` if a build script exists, else `next build` for Next.js, else none. Start: `npm run start` unless dev-like, else `next start` / `node <main|entry>`. Never `dev` (D-023). Unsupported projects are reported with a reason, never guessed.
+- Failure prefixes the skill acts on (D-068): `app build failed:` (image build) and `app did not start:` (not healthy in time). Start/build may come from `run.json`.
 - Health: compose healthcheck (`node -e fetch`, status < 500) on the first `scenario.json` flow path (or `/`), `--wait-timeout 120` (D-025). It probes only during boot: `start_interval` 1s within `start_period` 120s, then `interval` 24h (D-041).
-- Migrations (D-024), run after `db` is healthy and before `app` starts: Prisma (`migrate deploy`, or `db push --skip-generate` without a migrations folder), Drizzle (`drizzle-kit migrate` with a journal, else `push`), Knex (`migrate:latest`), raw SQL folder (`migrations/` or `db/migrations/`, filename order, piped into `db` via psql). ORM CLIs run in a one-off `app` container from the built image.
+- Migrations (D-024), run after `db` is healthy and before `app` starts: Prisma (schema from `package.json` `prisma.schema` if it is a string and exists, else `prisma/schema.prisma`; migrations folder next to it; `migrate deploy`, or `db push --skip-generate` without a migrations folder), Drizzle (`drizzle-kit migrate` with a journal, else `push`), Knex (`migrate:latest`), raw SQL folder (`migrations/` or `db/migrations/`, filename order, piped into `db` via psql). ORM CLIs run in a one-off `app` container from the built image.
 - Unsupported in v0.1 (reported, not guessed): apps whose DB access goes through Supabase/Firebase client APIs instead of a direct Postgres connection; non-Node backends.
 
 ## 6. Mock server
@@ -167,7 +173,7 @@ Determinism (D-029): no `random()`; values come from an integer hash of the row 
 Each flag: endpoint, evidence numbers per size, plain-language cause, suggested fix. Code location (file/line) added by the skill in the report only.
 
 ### 9.3 Chart (`chart.svg` / `chart.png`)
-1080x1350 (4:5). Top to bottom: title `VIBE BREAKPOINT — <project>`; headline (`Handles ~<N> users` / `Broke at <N> users` / `Handles <N>+ users` / `Data-growth probe only`); line chart users vs p95 with the 2 s limit and the breaking stage marked; table of the worst probe endpoint at small/medium/large; profile line (`small server: 1 CPU / 1 GB app, 1 CPU / 1 GB db`); footer repo URL + `search "vibe-breakpoint" on GitHub`. Bundled Liberation Mono; deterministic. Only numbers, endpoint keys and flag kinds; never paths, line numbers, env names or values, run id or dates. Details: D-042..D-044.
+1080x1350 (4:5). Top to bottom: title `VIBE BREAKPOINT — <project>`; headline (`Handles ~<N> users` / `Broke at <N> users` / `Handles <N>+ users` / `Data-growth probe only`); line chart users vs p95 (y-axis always in seconds, max a multiple of 2 s) with the 2 s limit and the breaking stage marked (label above the plot, D-062); table of the worst probe endpoint at small/medium/large; profile line (`small server: 1 CPU / 1 GB app, 1 CPU / 1 GB db`); footer repo URL + `search "vibe-breakpoint" on GitHub`. Bundled Liberation Mono; deterministic. Only numbers, endpoint keys and flag kinds; never paths, line numbers, env names or values, run id or dates. Details: D-042..D-044.
 
 ### 9.4 `report.md`
 Headings, in order: `# vibe-breakpoint report: <project>`, `## 1. Verdict`, `## 2. Breaking point`, `## 3. Data growth findings` (probe table, then per flag: cause, numbers, fix, fix prompt for Claude Code), `## 4. Code locations` (optional `.vibe-breakpoint/code-locations.md`, verbatim), `## 5. Test setup` (profile, data sizes from `seed.json`, scenario, what was mocked from `mock-log.json`, changes in the copy), `## 6. Limits`. Details: D-046.

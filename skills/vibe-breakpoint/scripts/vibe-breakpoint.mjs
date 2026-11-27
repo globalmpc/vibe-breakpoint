@@ -20,6 +20,8 @@ function composeFile(o) {
   return {
     name: o.runId,
     networks: { "vb-net": { internal: true, labels } },
+    // D-067: the fake env file is a BuildKit secret for the template build only (never in image layers)
+    ...o.app.buildCmd !== void 0 && { secrets: { vbenv: { file: esc(o.envFile) } } },
     services: {
       db: {
         ...base,
@@ -44,7 +46,7 @@ function composeFile(o) {
         ...base,
         init: true,
         image: "vb-app:" + o.runId,
-        build: { context: o.app.context, dockerfile: o.app.dockerfile, labels, ...o.app.buildCmd && { args: { BUILD_CMD: o.app.buildCmd } } },
+        build: { context: o.app.context, dockerfile: o.app.dockerfile, labels, ...o.app.buildCmd && { args: { BUILD_CMD: o.app.buildCmd } }, ...o.app.buildCmd !== void 0 && { secrets: ["vbenv"] } },
         ...o.app.command && { command: o.app.command.map(esc) },
         env_file: [o.envFile],
         cpus,
@@ -66,128 +68,10 @@ function composeFile(o) {
 
 // src/sandbox/detect.ts
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-var Unsupported = class extends Error {
-};
-var OTHER = ["go.mod", "requirements.txt", "pyproject.toml", "Gemfile", "composer.json", "pom.xml", "build.gradle", "Cargo.toml"];
-var ENTRIES = ["server.js", "index.js", "app.js", "src/server.js", "src/index.js"];
-var DEV_LIKE = /\b(next dev|nodemon|ts-node-dev|vite)\b|--watch|tsx watch/;
-var bin = (n2) => `node_modules/.bin/${n2}`;
-function detectMigrations(dir) {
-  const has = (p) => existsSync(join(dir, p));
-  if (has("prisma/schema.prisma")) {
-    return { kind: "prisma", cmd: has("prisma/migrations") ? [bin("prisma"), "migrate", "deploy"] : [bin("prisma"), "db", "push", "--skip-generate"] };
-  }
-  const dz = ["ts", "js", "mjs", "cjs"].map((e) => `drizzle.config.${e}`).find(has);
-  if (dz) {
-    const out2 = /out:\s*["'`]([^"'`]+)/.exec(readFileSync(join(dir, dz), "utf8"))?.[1] ?? "./drizzle";
-    return { kind: "drizzle", cmd: [bin("drizzle-kit"), has(join(out2, "meta/_journal.json")) ? "migrate" : "push"] };
-  }
-  if (["js", "cjs", "mjs", "ts"].some((e) => has(`knexfile.${e}`))) return { kind: "knex", cmd: [bin("knex"), "migrate:latest"] };
-  for (const d of ["migrations", "db/migrations"]) {
-    if (!has(d)) continue;
-    const files = readdirSync(join(dir, d)).filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql")).sort();
-    if (files.length) return { kind: "sql", files: files.map((f) => `${d}/${f}`) };
-  }
-  return { kind: "none" };
-}
-function detectApp(dir) {
-  const pj = join(dir, "package.json");
-  if (!existsSync(pj)) {
-    const other = OTHER.find((f) => existsSync(join(dir, f)));
-    throw new Unsupported(other ? `the backend is not Node (found ${other}); v0.1 supports Node backends only` : "no package.json found; v0.1 supports Node backends only");
-  }
-  const pkg = JSON.parse(readFileSync(pj, "utf8"));
-  const deps = { ...pkg.devDependencies, ...pkg.dependencies };
-  if (["@supabase/supabase-js", "firebase", "firebase-admin"].some((d) => d in deps) && !["pg", "postgres", "@prisma/client", "knex"].some((d) => d in deps)) {
-    throw new Unsupported("the app reaches its database through the Supabase/Firebase client API, not a direct Postgres connection");
-  }
-  const nextjs = "next" in deps;
-  const scripts = pkg.scripts ?? {};
-  const devLike = typeof scripts.start === "string" && DEV_LIKE.test(scripts.start);
-  const project = existsSync(join(dir, "Dockerfile"));
-  let start = null;
-  if (!project) {
-    if (typeof scripts.start === "string" && !devLike) start = ["npm", "run", "start"];
-    else if (nextjs) start = [bin("next"), "start"];
-    else if (pkg.main && existsSync(join(dir, pkg.main))) start = ["node", pkg.main];
-    else {
-      const f = ENTRIES.find((e) => existsSync(join(dir, e)));
-      if (!f) throw new Unsupported(`no start script and no entry file (looked for: ${ENTRIES.join(", ")})${devLike ? "; the start script runs a dev server" : ""}`);
-      start = ["node", f];
-    }
-  }
-  return {
-    framework: nextjs ? "nextjs" : "node",
-    dockerfile: project ? "project" : "template",
-    buildCmd: project ? "true" : scripts.build ? "npm run build" : nextjs ? bin("next") + " build" : "true",
-    start,
-    migrations: detectMigrations(dir)
-  };
-}
-function healthPath(projectDir) {
-  try {
-    const p = String(JSON.parse(readFileSync(join(projectDir, ".vibe-breakpoint/scenario.json"), "utf8")).flow[0].path).split("?")[0];
-    return p.startsWith("/") && !p.includes("{{") && !p.includes("$") ? p : "/";
-  } catch {
-    return "/";
-  }
-}
-function fromImages(dockerfile) {
-  const stages = /* @__PURE__ */ new Set();
-  const out2 = /* @__PURE__ */ new Set();
-  for (const line of dockerfile.split("\n")) {
-    const m = /^\s*FROM\s+(.*)$/i.exec(line);
-    if (!m) continue;
-    const t = m[1].trim().split(/\s+/).filter((x) => !x.startsWith("--"));
-    const as = t.findIndex((x) => x.toLowerCase() === "as");
-    const img = t[0];
-    if (as > 0 && t[as + 1]) stages.add(t[as + 1]);
-    if (!img || img === "scratch" || img.includes("$") || stages.has(img)) continue;
-    out2.add(img);
-  }
-  return [...out2];
-}
-
-// src/sandbox/safe-out.ts
-import { lstatSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join as join2, sep } from "node:path";
-function safeWriteOut(project, rel, data) {
-  const root = realpathSync(project);
-  const base = join2(root, ".vibe-breakpoint");
-  const parts = rel.split("/");
-  const file = parts.pop();
-  let cur = root;
-  for (const p of [".vibe-breakpoint", ...parts]) {
-    cur = join2(cur, p);
-    let st = lstatSync(cur, { throwIfNoEntry: false });
-    if (!st) {
-      mkdirSync(cur);
-      st = lstatSync(cur);
-    }
-    if (st.isSymbolicLink()) throw new Error(`refusing to write output: ${cur.slice(root.length + 1)} is a symlink`);
-    if (!st.isDirectory()) throw new Error(`refusing to write output: ${cur.slice(root.length + 1)} is not a directory`);
-  }
-  const real = realpathSync(cur);
-  if (real !== base && !real.startsWith(base + sep)) throw new Error("refusing to write output: path leaves .vibe-breakpoint");
-  const dest = join2(cur, file);
-  if (lstatSync(dest, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`refusing to write output: ${join2(...parts, file)} is a symlink`);
-  const tmp = join2(dirname(dest), `.${file}.${process.pid}.tmp`);
-  try {
-    writeFileSync(tmp, data, { flag: "wx" });
-    renameSync(tmp, dest);
-  } catch (e) {
-    rmSync(tmp, { force: true });
-    throw e;
-  }
-}
-
-// src/sandbox/env-names.ts
-import { readdirSync as readdirSync2, readFileSync as readFileSync2, statSync } from "node:fs";
-import { extname, join as join3 } from "node:path";
+import { dirname, join } from "node:path";
 
 // src/sandbox/copy.ts
-import { cpSync, lstatSync as lstatSync2, readlinkSync, realpathSync as realpathSync2 } from "node:fs";
+import { cpSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, relative } from "node:path";
 var SKIP_DIRS = /* @__PURE__ */ new Set([
   ".git",
@@ -204,18 +88,23 @@ var SAFE_ENV = /* @__PURE__ */ new Set([".env.example", ".env.sample", ".env.tem
 function isRealEnvFile(name) {
   return name === ".npmrc" || name.startsWith(".env") && !SAFE_ENV.has(name);
 }
+var SECRET_NAMES = /* @__PURE__ */ new Set([".npmrc", ".yarnrc", ".yarnrc.yml", ".netrc", "_netrc", ".pgpass", ".git-credentials", ".dev.vars", "credentials.json", "serviceaccountkey.json"]);
+function isSecretFile(name) {
+  const n2 = name.toLowerCase();
+  return SECRET_NAMES.has(n2) || n2.startsWith(".dev.vars.") || /^id_(rsa|dsa|ecdsa|ed25519)$/.test(n2) || /\.(pem|key|p12|pfx|jks|keystore|ppk)$/.test(n2) || /(service-?account.*|firebase-adminsdk.*)\.json$/.test(n2) || /^client_secret.*\.json$/.test(n2);
+}
 function safeLink(p, root) {
   try {
     if (isAbsolute(readlinkSync(p))) return false;
-    const real = realpathSync2(p);
+    const real = realpathSync(p);
     const rel = relative(root, real);
-    return !rel.startsWith("..") && !isAbsolute(rel) && !isRealEnvFile(basename(real));
+    return !rel.startsWith("..") && !isAbsolute(rel) && !isRealEnvFile(basename(real)) && !isSecretFile(basename(real));
   } catch {
     return false;
   }
 }
 function copyProject(src, dest) {
-  const root = realpathSync2(src);
+  const root = realpathSync(src);
   cpSync(root, dest, {
     recursive: true,
     verbatimSymlinks: true,
@@ -223,13 +112,248 @@ function copyProject(src, dest) {
     filter: (p) => {
       if (p === root) return true;
       const n2 = basename(p);
-      if (SKIP_DIRS.has(n2) || isRealEnvFile(n2)) return false;
-      return !lstatSync2(p).isSymbolicLink() || safeLink(p, root);
+      if (SKIP_DIRS.has(n2) || isRealEnvFile(n2) || isSecretFile(n2)) return false;
+      return !lstatSync(p).isSymbolicLink() || safeLink(p, root);
     }
   });
 }
 
+// src/sandbox/detect.ts
+var Unsupported = class extends Error {
+  constructor(m, runJsonCanFix = false) {
+    super(m);
+    this.runJsonCanFix = runJsonCanFix;
+  }
+  runJsonCanFix;
+};
+var OTHER = ["go.mod", "requirements.txt", "pyproject.toml", "Gemfile", "composer.json", "pom.xml", "build.gradle", "Cargo.toml"];
+var ENTRIES = ["server.js", "index.js", "app.js", "src/server.js", "src/index.js"];
+var DEV_LIKE = /\b(next dev|nodemon|ts-node-dev|vite|nx serve)\b|--watch|tsx watch/;
+var bin = (n2) => `node_modules/.bin/${n2}`;
+function hostBuildDir(dockerfile) {
+  for (const line of dockerfile.split(/\r?\n/)) {
+    const m = /^\s*(?:COPY|ADD)\s+(.*)$/i.exec(line);
+    if (!m) continue;
+    const t = m[1].trim().split(/\s+/);
+    if (t.some((x) => /^--from\b/.test(x))) continue;
+    for (const src of t.filter((x) => !x.startsWith("--")).slice(0, -1)) {
+      const seg = src.replace(/^(\.\/)+/, "").split("/")[0];
+      if (SKIP_DIRS.has(seg)) return seg;
+    }
+  }
+  return null;
+}
+function dockerfileStart(dockerfile) {
+  const lines2 = dockerfile.split(/\r?\n/);
+  const last = lines2.map((l) => /^\s*FROM\s/i.test(l)).lastIndexOf(true);
+  let workdir = "";
+  const copies = [];
+  const cmds = [];
+  for (const line of lines2.slice(last + 1)) {
+    const m = /^\s*(WORKDIR|COPY|ADD|CMD|ENTRYPOINT)\s+(.*)$/i.exec(line);
+    if (!m) continue;
+    const kind = m[1].toUpperCase(), text = m[2].trim();
+    if (kind === "WORKDIR") workdir = text;
+    else if (kind === "CMD" || kind === "ENTRYPOINT") cmds.push({ kind, text });
+    else {
+      const t = text.split(/\s+/);
+      if (t.some((x) => /^--from\b/.test(x))) continue;
+      const a = t.filter((x) => !x.startsWith("--"));
+      if (a.length >= 2) for (const src of a.slice(0, -1)) copies.push([src, a[a.length - 1]]);
+    }
+  }
+  const lastCmd = cmds[cmds.length - 1]?.text ?? null;
+  const hint = lastCmd && lastCmd.length <= 80 && !lastCmd.includes("$") ? lastCmd : null;
+  const arr = (kind) => {
+    const c = [...cmds].reverse().find((x) => x.kind === kind);
+    if (!c) return [];
+    try {
+      const v = JSON.parse(c.text);
+      return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : null;
+    } catch {
+      return null;
+    }
+  };
+  const ep = arr("ENTRYPOINT"), cmd2 = arr("CMD");
+  const argv2 = ep && cmd2 ? [...ep, ...cmd2] : null;
+  if (!argv2 || argv2[0] !== "node" || argv2.length < 2 || argv2.some((x) => x.includes("$") || x.startsWith("/") && !x.startsWith("--") || x.split("/").includes(".."))) return { start: null, text: hint };
+  const norm = (x) => x.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  const i = argv2.findIndex((x, k) => k > 0 && !x.startsWith("-"));
+  if (i < 0) return { start: null, text: hint };
+  const p = norm(argv2[i]);
+  for (const [src, destRaw] of copies) {
+    let dest = norm(destRaw);
+    if (dest.startsWith("/")) {
+      const w = norm(workdir);
+      if (w && dest === w) dest = ".";
+      else if (!w || !dest.startsWith(w + "/")) continue;
+      else dest = dest.slice(w.length + 1);
+    }
+    if (dest === ".") dest = "";
+    const s = norm(src);
+    if (!SKIP_DIRS.has(s.split("/")[0])) continue;
+    if (/\.[^/]+$/.test(s)) {
+      const b = s.split("/").pop();
+      if (p === dest || p === (dest ? `${dest}/${b}` : b)) {
+        const out3 = [...argv2];
+        out3[i] = s;
+        return { start: out3, text: hint };
+      }
+      continue;
+    }
+    const rest = dest === "" ? p : p === dest ? "" : p.startsWith(dest + "/") ? p.slice(dest.length + 1) : null;
+    if (rest === null) continue;
+    const out2 = [...argv2];
+    out2[i] = rest ? `${s}/${rest}` : s;
+    return { start: out2, text: hint };
+  }
+  return { start: null, text: hint };
+}
+function prismaSchema(dir, pkg) {
+  const custom = typeof pkg.prisma?.schema === "string" ? pkg.prisma.schema : "";
+  const schema = custom && existsSync(join(dir, custom)) ? custom : "prisma/schema.prisma";
+  return existsSync(join(dir, schema)) ? schema : null;
+}
+function prismaGenerate(dir, pkg, deps) {
+  const schema = prismaSchema(dir, pkg);
+  return schema && "prisma" in deps && /^[\w./-]+$/.test(schema) && !schema.includes("..") ? `${bin("prisma")} generate --schema ${schema}` : "";
+}
+function detectMigrations(dir, pkg) {
+  const has = (p) => existsSync(join(dir, p));
+  const schema = prismaSchema(dir, pkg);
+  if (schema) {
+    return { kind: "prisma", cmd: has(join(dirname(schema), "migrations")) ? [bin("prisma"), "migrate", "deploy"] : [bin("prisma"), "db", "push", "--skip-generate"] };
+  }
+  const dz = ["ts", "js", "mjs", "cjs"].map((e) => `drizzle.config.${e}`).find(has);
+  if (dz) {
+    const out2 = /out:\s*["'`]([^"'`]+)/.exec(readFileSync(join(dir, dz), "utf8"))?.[1] ?? "./drizzle";
+    return { kind: "drizzle", cmd: [bin("drizzle-kit"), has(join(out2, "meta/_journal.json")) ? "migrate" : "push"] };
+  }
+  if (["js", "cjs", "mjs", "ts"].some((e) => has(`knexfile.${e}`))) return { kind: "knex", cmd: [bin("knex"), "migrate:latest"] };
+  for (const d of ["migrations", "db/migrations"]) {
+    if (!has(d)) continue;
+    const files = readdirSync(join(dir, d)).filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql")).sort();
+    if (files.length) return { kind: "sql", files: files.map((f) => `${d}/${f}`) };
+  }
+  return { kind: "none" };
+}
+function detectApp(dir, run = {}) {
+  const pj = join(dir, "package.json");
+  if (!existsSync(pj)) {
+    const other = OTHER.find((f) => existsSync(join(dir, f)));
+    throw new Unsupported(other ? `the backend is not Node (found ${other}); v0.1 supports Node backends only` : "no package.json found; v0.1 supports Node backends only");
+  }
+  const pkg = JSON.parse(readFileSync(pj, "utf8"));
+  const deps = { ...pkg.devDependencies, ...pkg.dependencies };
+  if (["@supabase/supabase-js", "firebase", "firebase-admin"].some((d) => d in deps) && !["pg", "postgres", "@prisma/client", "knex"].some((d) => d in deps)) {
+    throw new Unsupported("the app reaches its database through the Supabase/Firebase client API, not a direct Postgres connection");
+  }
+  const nextjs = "next" in deps;
+  const scripts = pkg.scripts ?? {};
+  const devLike = typeof scripts.start === "string" && DEV_LIKE.test(scripts.start);
+  const df = existsSync(join(dir, "Dockerfile")) ? readFileSync(join(dir, "Dockerfile"), "utf8") : null;
+  const project = df !== null && hostBuildDir(df) === null;
+  let start = null;
+  let fromDockerfile = false;
+  let startSource = "project Dockerfile";
+  if (!project) {
+    if (run.start) {
+      start = run.start;
+      startSource = "run.json";
+    } else if (typeof scripts.start === "string" && !devLike) {
+      start = ["npm", "run", "start"];
+      startSource = "script";
+    } else if (nextjs) {
+      start = [bin("next"), "start"];
+      startSource = "script";
+    } else if (pkg.main && existsSync(join(dir, pkg.main))) {
+      start = ["node", pkg.main];
+      startSource = "main";
+    } else {
+      const f = ENTRIES.find((e) => existsSync(join(dir, e)));
+      if (f) {
+        start = ["node", f];
+        startSource = "entry file";
+      } else {
+        const d = df !== null ? dockerfileStart(df) : null;
+        if (d?.start) {
+          start = d.start;
+          fromDockerfile = true;
+          startSource = "dockerfile";
+        } else throw new Unsupported(`no start script and no entry file (looked for: ${ENTRIES.join(", ")})${devLike ? "; the start script runs a dev server" : ""}${d?.text ? `; the project Dockerfile starts it with ${d.text}` : ""}`, true);
+      }
+    }
+  }
+  return {
+    framework: nextjs ? "nextjs" : "node",
+    dockerfile: project ? "project" : "template",
+    buildCmd: project ? "true" : [prismaGenerate(dir, pkg, deps), run.build !== void 0 ? run.build?.join(" ") ?? "" : scripts.build ? "npm run build" : nextjs ? bin("next") + " build" : ""].filter(Boolean).join(" && ") || "true",
+    start,
+    startSource,
+    ...fromDockerfile && { startFromDockerfile: true },
+    migrations: detectMigrations(dir, pkg)
+  };
+}
+function healthPath(projectDir) {
+  try {
+    const p = String(JSON.parse(readFileSync(join(projectDir, ".vibe-breakpoint/scenario.json"), "utf8")).flow[0].path).split("?")[0];
+    return p.startsWith("/") && !p.includes("{{") && !p.includes("$") ? p : "/";
+  } catch {
+    return "/";
+  }
+}
+function fromImages(dockerfile) {
+  const stages = /* @__PURE__ */ new Set();
+  const out2 = /* @__PURE__ */ new Set();
+  for (const line of dockerfile.split(/\r?\n/)) {
+    const m = /^\s*FROM\s+(.*)$/i.exec(line);
+    if (!m) continue;
+    const t = m[1].trim().split(/\s+/).filter((x) => !x.startsWith("--"));
+    const as = t.findIndex((x) => x.toLowerCase() === "as");
+    const img = t[0];
+    if (as > 0 && t[as + 1]) stages.add(t[as + 1]);
+    if (!img || img === "scratch" || img.includes("$") || stages.has(img)) continue;
+    out2.add(img);
+  }
+  return [...out2];
+}
+
+// src/sandbox/safe-out.ts
+import { lstatSync as lstatSync2, mkdirSync, realpathSync as realpathSync2, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname as dirname2, join as join2, sep } from "node:path";
+function safeWriteOut(project, rel, data) {
+  const root = realpathSync2(project);
+  const base = join2(root, ".vibe-breakpoint");
+  const parts = rel.split("/");
+  const file = parts.pop();
+  let cur = root;
+  for (const p of [".vibe-breakpoint", ...parts]) {
+    cur = join2(cur, p);
+    let st = lstatSync2(cur, { throwIfNoEntry: false });
+    if (!st) {
+      mkdirSync(cur);
+      st = lstatSync2(cur);
+    }
+    if (st.isSymbolicLink()) throw new Error(`refusing to write output: ${cur.slice(root.length + 1)} is a symlink`);
+    if (!st.isDirectory()) throw new Error(`refusing to write output: ${cur.slice(root.length + 1)} is not a directory`);
+  }
+  const real = realpathSync2(cur);
+  if (real !== base && !real.startsWith(base + sep)) throw new Error("refusing to write output: path leaves .vibe-breakpoint");
+  const dest = join2(cur, file);
+  if (lstatSync2(dest, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`refusing to write output: ${join2(...parts, file)} is a symlink`);
+  const tmp = join2(dirname2(dest), `.${file}.${process.pid}.tmp`);
+  try {
+    writeFileSync(tmp, data, { flag: "wx" });
+    renameSync(tmp, dest);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
 // src/sandbox/env-names.ts
+import { readdirSync as readdirSync2, readFileSync as readFileSync2, statSync } from "node:fs";
+import { extname, join as join3 } from "node:path";
 var CODE_EXT = /* @__PURE__ */ new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".py", ".vue", ".svelte", ".astro"]);
 var VITE_BUILTIN = /* @__PURE__ */ new Set(["MODE", "DEV", "PROD", "SSR", "BASE_URL"]);
 var NAME = "[A-Za-z_][A-Za-z0-9_]*";
@@ -311,6 +435,51 @@ function envNames(projectDir) {
   const out2 = /* @__PURE__ */ new Set();
   walk(projectDir, out2);
   return [...out2].sort();
+}
+
+// src/sandbox/run-json.ts
+var bad = (m) => {
+  throw new Error(`run.json: ${m}`);
+};
+var FIRST = /* @__PURE__ */ new Set(["node", "npm", "pnpm", "yarn"]);
+var RUNNERS = /* @__PURE__ */ new Set(["exec", "dlx", "x", "create"]);
+var NODE_CODE = /^(-e|-p|-r|--eval|--print|--require|--import|--loader|--experimental-loader)(=|$)/;
+var CONFIG = /^--(registry|userconfig|globalconfig|cache|prefix)(=|$)/;
+var TOKEN = /^[\w@%+=:,./-]+$/;
+var NAME2 = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var RESERVED_ENV = /^(BUILD_CMD|PATH|HOME|SHELL|IFS|ENV|BASH_ENV|NODE_OPTIONS|NODE_PATH|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|LD_\w+|(npm|pnpm)_config_\w+|YARN_\w+|COREPACK_\w+)$/i;
+function argv(key, v) {
+  if (!Array.isArray(v) || v.length < 1 || v.length > 12) return bad(`${key} must be an array of 1 to 12 strings`);
+  for (const t of v) {
+    if (typeof t !== "string" || t.length < 1 || t.length > 120) return bad(`${key}: each token must be a string of 1 to 120 characters`);
+    if (!TOKEN.test(t)) return bad(`${key}: tokens may only use letters, digits and _ @ % + = : , . / -`);
+    if (t.includes("..") || t.startsWith("/")) return bad(`${key}: tokens must not contain ".." or start with "/"`);
+  }
+  if (!FIRST.has(v[0]) && !v[0].startsWith("node_modules/.bin/")) return bad(`${key}: first token must be node, npm, pnpm, yarn or a node_modules/.bin/ path`);
+  if (v[0] !== "node" && !v[0].startsWith("node_modules/") && RUNNERS.has(v[1])) return bad(`${key}: exec, dlx, x and create are not allowed`);
+  if (v.slice(1).some((t) => CONFIG.test(t))) return bad(`${key}: registry and config flags are not allowed`);
+  if (v[0] === "node" && v.slice(1).some((t) => NODE_CODE.test(t))) return bad(`${key}: node -e, -p, -r, --import and --loader are not allowed`);
+  return v;
+}
+function parseRunJson(text) {
+  let j;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    return bad("invalid JSON");
+  }
+  if (typeof j !== "object" || j === null || Array.isArray(j)) return bad("must be a JSON object");
+  const o = j;
+  if (Object.keys(o).some((k) => !["build", "start", "env_names"].includes(k))) bad("only build, start and env_names are allowed (names only, never values)");
+  const out2 = {};
+  if (o.build !== void 0) out2.build = o.build === null ? null : argv("build", o.build);
+  if (o.start !== void 0) out2.start = argv("start", o.start);
+  if (o.env_names !== void 0) {
+    const n2 = o.env_names;
+    if (!Array.isArray(n2) || n2.length > 50 || n2.some((x) => typeof x !== "string" || !NAME2.test(x) || x.length > 100)) return bad("env_names must be up to 50 names matching [A-Za-z_][A-Za-z0-9_]*");
+    out2.env_names = [...new Set(n2)];
+  }
+  return out2;
 }
 
 // src/sandbox/sandbox.ts
@@ -471,15 +640,15 @@ var lines = (s) => (s ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
 function requiredImages(dir, own) {
   return [.../* @__PURE__ */ new Set(["postgres:16", "node:22-alpine", ...own ? fromImages(readFileSync3(join4(dir, "Dockerfile"), "utf8")) : []])];
 }
-function createSandbox(project, runId, profile, mockDir, templateDockerfile) {
+function createSandbox(project, runId, profile, mockDir, templateDockerfile, run = {}) {
   const dir = runDir(runId);
   mkdirSync2(dir, { mode: 448 });
   writeFileSync2(join4(dir, "pid"), String(process.pid));
   const copyDir = join4(dir, "project");
   copyProject(project, copyDir);
-  const plan = detectApp(copyDir);
+  const plan = detectApp(copyDir, run);
   const dbPassword = randomBytes2(16).toString("hex");
-  const env = testEnv(envNames(project), dbPassword);
+  const env = testEnv([.../* @__PURE__ */ new Set([...envNames(project), ...run.env_names ?? []])].filter((n2) => !RESERVED_ENV.test(n2)), dbPassword);
   const envFile = join4(dir, "test.env");
   writeFileSync2(envFile, envFileText(env), { mode: 384 });
   const own = plan.dockerfile === "project";
@@ -901,7 +1070,7 @@ ${e instanceof Error ? e.message : String(e)}`);
 var METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 var PLACEHOLDERS = ["user.email", "user.password", "random.email"];
 var isObj2 = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
-var bad = (m) => {
+var bad2 = (m) => {
   throw new Error(`scenario.json: ${m}`);
 };
 function strings(x, out2 = []) {
@@ -917,38 +1086,38 @@ function parseScenario(text, seed) {
   try {
     j = JSON.parse(text);
   } catch {
-    return bad("invalid JSON");
+    return bad2("invalid JSON");
   }
-  if (!isObj2(j)) return bad("must be a JSON object");
-  if (j.schema !== 1) bad("schema must be 1");
+  if (!isObj2(j)) return bad2("must be a JSON object");
+  if (j.schema !== 1) bad2("schema must be 1");
   const flow = j.flow;
-  if (!Array.isArray(flow) || flow.length < 1 || flow.length > 20) return bad("flow must have 1 to 20 steps");
+  if (!Array.isArray(flow) || flow.length < 1 || flow.length > 20) return bad2("flow must have 1 to 20 steps");
   const names = /* @__PURE__ */ new Set();
   const used = /* @__PURE__ */ new Set();
   for (const s of flow) {
-    if (!isObj2(s)) return bad("each flow step must be an object");
-    if (typeof s.name !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(s.name)) return bad(`step name ${JSON.stringify(s.name)} must match [A-Za-z0-9_-]{1,40}`);
-    if (names.has(s.name)) bad(`duplicate step name "${s.name}"`);
+    if (!isObj2(s)) return bad2("each flow step must be an object");
+    if (typeof s.name !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(s.name)) return bad2(`step name ${JSON.stringify(s.name)} must match [A-Za-z0-9_-]{1,40}`);
+    if (names.has(s.name)) bad2(`duplicate step name "${s.name}"`);
     names.add(s.name);
-    if (typeof s.method !== "string" || !METHODS.includes(s.method)) return bad(`step "${s.name}": method must be one of ${METHODS.join(", ")}`);
-    if (typeof s.path !== "string" || !s.path.startsWith("/") || s.path.startsWith("//") || /[\s\\]/.test(s.path)) return bad(`step "${s.name}": path must start with a single "/" and have no spaces or backslashes`);
-    if (s.body !== void 0 && !isObj2(s.body)) return bad(`step "${s.name}": body must be a JSON object`);
-    if (s.save !== void 0 && (!isObj2(s.save) || typeof s.save.cookie !== "boolean")) return bad(`step "${s.name}": save must be {"cookie": boolean}`);
+    if (typeof s.method !== "string" || !METHODS.includes(s.method)) return bad2(`step "${s.name}": method must be one of ${METHODS.join(", ")}`);
+    if (typeof s.path !== "string" || !s.path.startsWith("/") || s.path.startsWith("//") || /[\s\\]/.test(s.path)) return bad2(`step "${s.name}": path must start with a single "/" and have no spaces or backslashes`);
+    if (s.body !== void 0 && !isObj2(s.body)) return bad2(`step "${s.name}": body must be a JSON object`);
+    if (s.save !== void 0 && (!isObj2(s.save) || typeof s.save.cookie !== "boolean")) return bad2(`step "${s.name}": save must be {"cookie": boolean}`);
     for (const str of [s.path, ...strings(s.body)]) for (const m of str.matchAll(/\{\{([^}]*)\}\}/g)) {
-      if (!PLACEHOLDERS.includes(m[1])) bad(`step "${s.name}": unknown placeholder {{${m[1]}}}`);
+      if (!PLACEHOLDERS.includes(m[1])) bad2(`step "${s.name}": unknown placeholder {{${m[1]}}}`);
       used.add(m[1]);
     }
   }
-  if (!flow.some((s) => !s.save?.cookie)) bad("at least one step must not be a cookie-saving step");
+  if (!flow.some((s) => !s.save?.cookie)) bad2("at least one step must not be a cookie-saving step");
   const think = j.think_time_s ?? 1;
-  if (typeof think !== "number" || !(think >= 0 && think <= 60)) bad("think_time_s must be a number from 0 to 60");
+  if (typeof think !== "number" || !(think >= 0 && think <= 60)) bad2("think_time_s must be a number from 0 to 60");
   const probe = j.probe_endpoints;
   if (probe !== void 0) {
-    if (!Array.isArray(probe) || probe.some((p) => typeof p !== "string" || !names.has(p))) bad("probe_endpoints must name flow steps");
+    if (!Array.isArray(probe) || probe.some((p) => typeof p !== "string" || !names.has(p))) bad2("probe_endpoints must name flow steps");
   }
   for (const u of used) {
-    if (u.startsWith("user.") && !((seed?.test_users ?? 0) >= 1 && seed.tables.some((t) => Object.values(t.columns).some((g) => g.gen === "password_hash") && hasEmailGen(t)))) bad(`scenario uses {{${u}}} but seed.json has no test_users with a password_hash table that has an email generator column`);
-    if (u === "random.email" && !(seed && emailTable(seed))) bad(`scenario uses {{${u}}} but seed.json has no table with an email column`);
+    if (u.startsWith("user.") && !((seed?.test_users ?? 0) >= 1 && seed.tables.some((t) => Object.values(t.columns).some((g) => g.gen === "password_hash") && hasEmailGen(t)))) bad2(`scenario uses {{${u}}} but seed.json has no test_users with a password_hash table that has an email generator column`);
+    if (u === "random.email" && !(seed && emailTable(seed))) bad2(`scenario uses {{${u}}} but seed.json has no table with an email column`);
   }
   return { schema: 1, flow, think_time_s: think, ...probe !== void 0 && { probe_endpoints: probe } };
 }
@@ -1209,13 +1378,13 @@ function chartSvg(result, projectName) {
   } else {
     const n2 = stages.length;
     const maxP = Math.max(2e3, ...stages.map((s) => s.p95_ms ?? 0));
-    const yMax = Math.ceil(maxP * 1.1 / 500) * 500;
+    const yMax = Math.ceil(maxP * 1.1 / 2e3) * 2e3;
     const py = (v) => PY1 - v / yMax * (PY1 - PY0);
     const px = (i) => PX0 + (i + 0.5) * (PX1 - PX0) / n2;
     for (let i = 0; i <= 4; i++) {
       const y = py(yMax * i / 4);
       line(PX0, y, PX1, y, GRID);
-      text(PX0 - 10, y + 10, 28, fmtMs(yMax * i / 4), { anchor: "end" });
+      text(PX0 - 10, y + 10, 28, `${+(yMax * i / 4e3).toFixed(1)} s`, { anchor: "end" });
     }
     const step = Math.ceil(n2 / 10);
     stages.forEach((s, i) => {
@@ -1239,8 +1408,8 @@ function chartSvg(result, projectName) {
         line(x, PY0, x, PY1, RED, ' stroke-dasharray="8 8"');
         out2.push(`<circle cx="${r13(x)}" cy="${r13(py(stages[i].p95_ms ?? yMax))}" r="11" fill="${RED}"/>`);
         const label = `broke at ${fmtNum(bp.users_broke)} users ${reasonSuffix(bp, stages[i].error_rate)}`;
-        if (x <= 540) text(x + 8, PY0 + 25, 28, label, { fill: RED, bold: true });
-        else text(x - 8, PY0 + 25, 28, label, { anchor: "end", fill: RED, bold: true });
+        if (x <= 540) text(x + 8, PY0 - 20, 28, label, { fill: RED, bold: true });
+        else text(x - 8, PY0 - 20, 28, label, { anchor: "end", fill: RED, bold: true });
       }
     }
     const ran = { app_cpu: "app CPU", db_cpu: "database CPU", memory: "memory", app_code: "no resource (app code)" };
@@ -2001,6 +2170,13 @@ var usage = `usage:
   vibe-breakpoint cleanup  [--all]
   vibe-breakpoint --version
 `;
+function hostBuildDirOf(project) {
+  try {
+    return hostBuildDir(readFileSync5(join6(project, "Dockerfile"), "utf8"));
+  } catch {
+    return null;
+  }
+}
 var { values, positionals } = parseArgs({
   allowPositionals: true,
   strict: false,
@@ -2069,11 +2245,16 @@ async function runCmd(project) {
     const scenarioText = inputFile(scenarioFile, "scenario.json");
     const scenario = scenarioText !== void 0 ? parseScenario(scenarioText, seed) : void 0;
     if (!scenario) console.log("vibe-breakpoint: no scenario.json; skipping load test");
-    const sb = createSandbox(project, runId, profile, mockDir, template);
+    const runText = inputFile(join6(project, ".vibe-breakpoint", "run.json"), "run.json");
+    const runJson = runText !== void 0 ? parseRunJson(runText) : void 0;
+    const sb = createSandbox(project, runId, profile, mockDir, template, runJson);
     composePath = sb.composePath;
     env = sb.env;
     if (scenario) sb.images.push("grafana/k6");
     const missing = missingImages(sb.images);
+    const hostDir = sb.plan.dockerfile === "template" ? hostBuildDirOf(project) : null;
+    if (hostDir) console.log(`vibe-breakpoint: project Dockerfile not used: it copies ${hostDir}/ from the host build; using the template`);
+    if (sb.plan.startFromDockerfile) console.log(`vibe-breakpoint: start command taken from the project Dockerfile (${sb.plan.start?.join(" ")})`);
     console.log(`vibe-breakpoint: building app image from ${sb.plan.dockerfile === "project" ? "project Dockerfile" : "template node.Dockerfile"} (network access during build only; the app runs offline)`);
     console.log(`vibe-breakpoint: images: ${sb.images.map((i) => `${i} (${missing.includes(i) ? "missing" : "local"})`).join(", ")}`);
     if (missing.length) {
@@ -2101,7 +2282,7 @@ async function runCmd(project) {
     try {
       up(composePath, ["app"]);
     } catch (e) {
-      throw new Error(`app did not become healthy within 120 s (the health check needs Docker Engine 25 or newer) (GET ${sb.healthPath}):
+      throw new Error(`app did not start: app did not become healthy within 120 s (the health check needs Docker Engine 25 or newer) (GET ${sb.healthPath}):
 ${appLogs(composePath)}
 ${e instanceof Error ? e.message : ""}`);
     }
@@ -2203,7 +2384,7 @@ ${e instanceof Error ? e.message : ""}`);
       const result = buildResult({ runId, toolVersion: package_default.version, profile, size: cfgSize, stageDurationS: durationS, thinkTimeS: scenario.think_time_s, stages: done, probe, flags });
       safeWriteOut(project, "out/result.json", JSON.stringify(result, null, 2));
       const bp = result.breaking_point;
-      console.log(bp ? `vibe-breakpoint: breaking point ${bp.users_broke} users (${bp.reason}); handles about ${bp.users_ok}; limiting: ${result.limiting_resource}` : `vibe-breakpoint: no breaking point up to ${done[done.length - 1].users}`);
+      console.log(bp ? `vibe-breakpoint: breaking point ${bp.users_broke} users (${bp.reason}); ${bp.users_ok > 0 ? `handles about ${bp.users_ok}` : "broke at the first stage tested"}; limiting: ${result.limiting_resource}` : `vibe-breakpoint: no breaking point up to ${done[done.length - 1].users}`);
     }
   } catch (e) {
     failed = true;
@@ -2237,10 +2418,22 @@ function inspectCmd(project) {
   const docker2 = d.status === 0 ? { available: true, reason: null } : { available: false, reason: d.error ? "the docker command was not found" : "the Docker daemon is not running or not reachable" };
   let plan;
   let unsupported = null;
+  let run = {};
+  let runError = null;
+  const runText = readRegular(join6(project, ".vibe-breakpoint", "run.json"));
+  if (runText !== void 0) {
+    try {
+      run = parseRunJson(runText);
+    } catch (e) {
+      runError = e instanceof Error ? e.message : "run.json is not valid";
+    }
+  }
+  let canFix = false;
   try {
-    plan = detectApp(project);
+    plan = detectApp(project, run);
   } catch (e) {
     unsupported = e instanceof Unsupported ? e.message : "package.json could not be parsed";
+    canFix = e instanceof Unsupported && e.runJsonCanFix;
   }
   let dbDeps = [];
   try {
@@ -2265,7 +2458,13 @@ function inspectCmd(project) {
     images,
     missing_images: docker2.available && plan ? missingImages(images) : null,
     has_scenario: isFile("scenario.json"),
-    has_seed: isFile("seed.json")
+    has_seed: isFile("seed.json"),
+    build: plan && plan.dockerfile === "template" && plan.buildCmd !== "true" ? plan.buildCmd : null,
+    start: plan?.start?.join(" ") ?? null,
+    start_source: plan?.startSource ?? null,
+    has_run: isFile("run.json"),
+    ...runError && { run_json_error: runError },
+    ...canFix && { run_json_can_fix: true }
   };
   const text = JSON.stringify(info, null, 2);
   try {
@@ -2288,8 +2487,8 @@ async function renderCmd(project) {
   } catch {
     fail("result.json is not valid JSON");
   }
-  const bad2 = resultError(result);
-  if (bad2) fail(`result.json: ${bad2}`);
+  const bad3 = resultError(result);
+  if (bad3) fail(`result.json: ${bad3}`);
   let mockLog;
   try {
     const m = JSON.parse(readRegular(join6(base, "out", "mock-log.json")) ?? "");

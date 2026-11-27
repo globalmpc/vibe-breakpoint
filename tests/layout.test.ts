@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseScenario } from "../src/load/scenario.js";
+import { parseRunJson } from "../src/sandbox/run-json.js";
 import { parseSeed } from "../src/seed/seed.js";
 
 const json = (p: string) => JSON.parse(readFileSync(p, "utf8"));
@@ -28,14 +29,17 @@ describe("skill", () => {
   it("SKILL.md lint", () => {
     expect(skill).toMatch(/^name: vibe-breakpoint$/m);
     expect(skill).toMatch(/^description:/m);
-    for (const t of ["${CLAUDE_SKILL_DIR}/scripts/vibe-breakpoint.mjs", "inspect", "run", "--pull", "render", "cleanup", "run_in_background", "grafana/k6", "code-locations.md", "static-report.md", "No load test ran"]) expect(skill).toContain(t);
+    for (const t of ["${CLAUDE_SKILL_DIR}/scripts/vibe-breakpoint.mjs", "inspect", "run", "--pull", "render", "cleanup", "run_in_background", "grafana/k6", "code-locations.md", "static-report.md", "No load test ran", "run.json", "app build failed:", "app did not start:", "up to 3 builds"]) expect(skill).toContain(t);
     expect(skill).not.toMatch(/CLAUDE_PLUGIN_ROOT|\$CLAUDE_SKILL_DIR/);
     for (const m of skill.matchAll(/\$\{CLAUDE_SKILL_DIR\}\/([^\s"`)]+)/g)) expect(existsSync(join("skills/vibe-breakpoint", m[1])), m[1]).toBe(true);
+    expect(skill).toContain("env_names");
     expect(skill.split("\n").length).toBeLessThan(200);
     expect(skill).not.toMatch(/\b(cat|source|less|head|tail|grep)\b[^\n]*\.env(?!\.(example|sample|template))/);
   });
   it("inputs.md examples parse", () => {
     const blocks = [...readFileSync(join(dir, "references/inputs.md"), "utf8").matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
+    for (const b of blocks.filter((x) => !x.includes('"tables"') && !x.includes('"flow"'))) parseRunJson(b);
+    expect(blocks.filter((x) => /"start"/.test(x)).length).toBe(2);
     const seeds = blocks.filter((b) => b.includes('"tables"'));
     const scenarios = blocks.filter((b) => b.includes('"flow"'));
     expect(seeds.length).toBeGreaterThan(0);

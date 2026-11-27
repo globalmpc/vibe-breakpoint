@@ -27,7 +27,7 @@ Every number comes from a measurement. Claude writes the test inputs and explain
 
 - **Your project is never modified.** The test runs on a temporary copy. The only thing written into your project is the folder `.vibe-breakpoint/`.
 - **Your databases are never used.** The test database is a fresh Postgres container in memory, created and deleted per run. No database URL from your config is ever used.
-- **Env vars: names only.** Real `.env*` files are never opened by Claude. The test gets generated fake values for every name.
+- **Env vars: names only.** Claude never reads your real `.env*` files. The bundled script scans them for variable names only, in memory, and discards the values; nothing from them is stored or printed. The test gets generated fake values for every name.
 - **No outside calls.** The app runs on a Docker network without internet. OpenAI, Anthropic, Stripe and Resend calls go to a local mock server.
 - **Local only.** Load goes only to the app inside the test environment, never to a public or production URL.
 - **It asks first.** Pulling images and building containers needs your OK, once per run.

@@ -18,6 +18,8 @@ export function composeFile(o: { runId: string; profile: Profile; dbPassword: st
   return {
     name: o.runId,
     networks: { "vb-net": { internal: true, labels } },
+    // D-067: the fake env file is a BuildKit secret for the template build only (never in image layers)
+    ...(o.app.buildCmd !== undefined && { secrets: { vbenv: { file: esc(o.envFile) } } }),
     services: {
       db: {
         ...base,
@@ -42,7 +44,7 @@ export function composeFile(o: { runId: string; profile: Profile; dbPassword: st
         ...base,
         init: true,
         image: "vb-app:" + o.runId,
-        build: { context: o.app.context, dockerfile: o.app.dockerfile, labels, ...(o.app.buildCmd && { args: { BUILD_CMD: o.app.buildCmd } }) },
+        build: { context: o.app.context, dockerfile: o.app.dockerfile, labels, ...(o.app.buildCmd && { args: { BUILD_CMD: o.app.buildCmd } }), ...(o.app.buildCmd !== undefined && { secrets: ["vbenv"] }) },
         ...(o.app.command && { command: o.app.command.map(esc) }),
         env_file: [o.envFile],
         cpus,

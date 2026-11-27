@@ -25,6 +25,7 @@ const variants: [string, ReturnType<typeof mk>, string][] = [
   ["probe only", mk({ stages: [] }), "Data-growth probe only"],
   ["no probe", mk({ probe: {}, flags: [] }), "Handles ~10 users"],
   ["null p95", mk({ stages: [st(10, 50), st(25, null, 1)] }), "Handles ~10 users"],
+  ["first stage reported case", mk({ stages: [st(10, 4500)] }), "Broke at 10 users"],
   ["20 stages", mk({ stages: Array.from({ length: 20 }, (_, i) => st(i + 1, 100 + i)) }), "Handles 20+ users"],
 ];
 
@@ -50,6 +51,7 @@ describe("chart", () => {
       expect(svg.trimEnd().endsWith("</svg>")).toBe(true);
       expect(svg).not.toMatch(/&(?!(amp|lt|gt|quot|apos);)/);
       expect(entities(svg)).toContain(headline);
+      const boxes: [number, number, number, number][] = [];
       for (const m of svg.matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)) {
         const attr = (k: string) => new RegExp(`${k}="([^"]*)"`).exec(m[1])?.[1];
         const x = Number(attr("x")), fs = Number(attr("font-size")), anchor = attr("text-anchor"), w = [...entities(m[2])].length * 0.6 * fs;
@@ -57,6 +59,16 @@ describe("chart", () => {
         const [l, rr] = anchor === "end" ? [x - w, x] : anchor === "middle" ? [x - w / 2, x + w / 2] : [x, x + w];
         expect(l).toBeGreaterThanOrEqual(39.9);
         expect(rr).toBeLessThanOrEqual(1040.1);
+        const y = Number(attr("y"));
+        boxes.push([l, rr, y - 0.8 * fs, y + 0.2 * fs]);
+        if (anchor === "end" && x === 150) {
+          expect(entities(m[2])).toMatch(/ s$/);
+          expect(m[2]).not.toContain("ms");
+        }
+      }
+      for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+        const [a, b] = [boxes[i], boxes[j]];
+        expect(a[0] < b[1] && b[0] < a[1] && a[2] < b[3] && b[2] < a[3], `${i} overlaps ${j}`).toBe(false);
       }
     }
   });

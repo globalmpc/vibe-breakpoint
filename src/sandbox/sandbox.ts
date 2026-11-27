@@ -11,6 +11,7 @@ import { copyProject } from "./copy.js";
 import { detectApp, fromImages, healthPath, type AppPlan } from "./detect.js";
 import { envNames } from "./env-names.js";
 import { envFileText, testEnv } from "./test-env.js";
+import { RESERVED_ENV, type RunJson } from "./run-json.js";
 
 export const TEMP_PREFIX = "vibe-breakpoint-";
 export const RUN_DIR_RE = /^vibe-breakpoint-(vb-\d{14}-[0-9a-f]{4})$/;
@@ -37,15 +38,15 @@ export function requiredImages(dir: string, own: boolean): string[] {
 
 export type Sandbox = { composePath: string; copyDir: string; plan: AppPlan; env: Record<string, string>; images: string[]; healthPath: string };
 
-export function createSandbox(project: string, runId: string, profile: Profile, mockDir: string, templateDockerfile: string): Sandbox {
+export function createSandbox(project: string, runId: string, profile: Profile, mockDir: string, templateDockerfile: string, run: RunJson = {}): Sandbox {
   const dir = runDir(runId);
   mkdirSync(dir, { mode: 0o700 });
   writeFileSync(join(dir, "pid"), String(process.pid));
   const copyDir = join(dir, "project");
   copyProject(project, copyDir);
-  const plan = detectApp(copyDir);
+  const plan = detectApp(copyDir, run);
   const dbPassword = randomBytes(16).toString("hex");
-  const env = testEnv(envNames(project), dbPassword);
+  const env = testEnv([...new Set([...envNames(project), ...(run.env_names ?? [])])].filter((n) => !RESERVED_ENV.test(n)), dbPassword);
   const envFile = join(dir, "test.env");
   writeFileSync(envFile, envFileText(env), { mode: 0o600 });
   const own = plan.dockerfile === "project";

@@ -117,13 +117,13 @@ export function chartSvg(result: Result, projectName: string): string {
   } else {
     const n = stages.length;
     const maxP = Math.max(2000, ...stages.map((s) => s.p95_ms ?? 0));
-    const yMax = Math.ceil((maxP * 1.1) / 500) * 500;
+    const yMax = Math.ceil((maxP * 1.1) / 2000) * 2000; // ticks fall on multiples of 500 ms; axis always in seconds (D-062)
     const py = (v: number) => PY1 - (v / yMax) * (PY1 - PY0);
     const px = (i: number) => PX0 + ((i + 0.5) * (PX1 - PX0)) / n;
     for (let i = 0; i <= 4; i++) {
       const y = py((yMax * i) / 4);
       line(PX0, y, PX1, y, GRID);
-      text(PX0 - 10, y + 10, 28, fmtMs((yMax * i) / 4), { anchor: "end" });
+      text(PX0 - 10, y + 10, 28, `${+((yMax * i) / 4000).toFixed(1)} s`, { anchor: "end" });
     }
     const step = Math.ceil(n / 10);
     stages.forEach((s, i) => { if (i % step === 0 || i === n - 1) text(px(i), 855, 28, fmtNum(s.users), { anchor: "middle" }); });
@@ -143,8 +143,8 @@ export function chartSvg(result: Result, projectName: string): string {
         line(x, PY0, x, PY1, RED, ' stroke-dasharray="8 8"');
         out.push(`<circle cx="${r1(x)}" cy="${r1(py(stages[i].p95_ms ?? yMax))}" r="11" fill="${RED}"/>`);
         const label = `broke at ${fmtNum(bp.users_broke)} users ${reasonSuffix(bp, stages[i].error_rate)}`;
-        if (x <= 540) text(x + 8, PY0 + 25, 28, label, { fill: RED, bold: true });
-        else text(x - 8, PY0 + 25, 28, label, { anchor: "end", fill: RED, bold: true });
+        if (x <= 540) text(x + 8, PY0 - 20, 28, label, { fill: RED, bold: true });
+        else text(x - 8, PY0 - 20, 28, label, { anchor: "end", fill: RED, bold: true });
       }
     }
     const ran: Record<string, string> = { app_cpu: "app CPU", db_cpu: "database CPU", memory: "memory", app_code: "no resource (app code)" };

@@ -219,5 +219,5 @@ If the code does not match the flag, report the flag with the endpoint and say t
 ## Never do
 
 - Do not modify the user's project. Fixes are suggestions in the report. The sandbox copy is the only thing the tool changes.
-- Do not open real `.env*` files (`.env.example` only).
+- Read env files only as `.env.example`/`.sample`/`.template`. Env var names are in `env_names` in `inspect.json`.
 - Do not invent measurements. Every number in the report comes from the scripts.
