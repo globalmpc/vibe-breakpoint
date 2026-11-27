@@ -34,6 +34,31 @@ describe("copyProject (AC1)", () => {
   });
 });
 
+describe("copyProject secret files (AC6)", () => {
+  const bad = [".netrc", "_netrc", ".dev.vars", ".dev.vars.production", ".yarnrc.yml", ".yarnrc", ".pgpass", ".git-credentials", ".npmrc", "id_rsa", "id_ed25519", "key.pem", "server.key", "cert.p12", "a.pfx", "serviceAccountKey.json", "my-service-account.json", "config/credentials.json", "client_secret_1.json", "x-firebase-adminsdk-y.json"];
+  const good = ["id_rsa.pub", ".env.example", "src/keys.ts", "src/credentials.ts", "package.json", "tsconfig.json", "public/key.svg"];
+  it("drops secrets at root and in subfolders and symlinks to them, keeps the rest", () => {
+    const src = tmp();
+    for (const f of bad) { put(src, f, "s"); put(src, `sub/${f}`, "s"); }
+    for (const f of good) put(src, f, "x");
+    symlinkSync(".netrc", join(src, "link-to-netrc"));
+    const dest = join(tmp(), "out");
+    copyProject(src, dest);
+    expect(walk(dest).sort()).toEqual([...good].sort());
+    expect(existsSync(join(dest, "link-to-netrc"))).toBe(false);
+  });
+});
+
+describe("node.Dockerfile lockfile install (AC3)", () => {
+  it("has pnpm, yarn, npm ci, npm install in order", () => {
+    const t = readFileSync("skills/vibe-breakpoint/templates/dockerfiles/node.Dockerfile", "utf8");
+    const order = ["corepack enable pnpm && npm_config_dangerously_allow_all_builds=true pnpm_config_dangerously_allow_all_builds=true pnpm install --frozen-lockfile", "corepack enable yarn && yarn install --frozen-lockfile", "elif [ -f package-lock.json ]; then npm ci", "else npm install"].map((s) => t.indexOf(s));
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    for (const s of ["COPY package*.json pnpm-lock.yaml* yarn.lock* ./", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "YARN_NODE_LINKER=node-modules"]) expect(t).toContain(s);
+  });
+});
+
 describe("envNames (AC2)", () => {
   it.each([
     ["express-pg", "fixtures/express-pg"],

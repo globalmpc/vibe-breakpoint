@@ -1,4 +1,4 @@
-# Writing scenario.json and seed.json
+# Writing scenario.json, seed.json and run.json
 
 Both files go in `PROJECT/.vibe-breakpoint/`. Write them from reading the code. They hold no secrets and no env values. Any rule broken here makes `run` fail before Docker starts, with a message naming the file.
 
@@ -56,4 +56,25 @@ Both files go in `PROJECT/.vibe-breakpoint/`. Write them from reading the code. 
   ],
   "test_users": 50
 }
+```
+
+## run.json (optional)
+
+`PROJECT/.vibe-breakpoint/run.json` sets the build and start command for the test copy, and extra env names. All fields are optional. It never changes the project.
+
+- `build`: argv array (or `null` for no build step), max 12 tokens of max 120 characters. `start`: argv array, same limits.
+- First token: `node`, `npm`, `pnpm`, `yarn` or a path starting `node_modules/.bin/`. Tokens use only letters, digits and `_ @ % + = : , . / -`; no `..`, no leading `/`, no spaces, quotes, `$`, `;`, `&`, `|`. No `&&`: one command only.
+- `env_names`: up to 50 env var NAMES the build or app reads that the scan missed (for example `NEXT_PUBLIC_X`). Names only, never values: values are generated. Any other key is rejected.
+- With a project Dockerfile, `build` and `start` are ignored; `env_names` still apply.
+
+Example: no start script, the entry is `src/main.js`.
+
+```json
+{ "start": ["node", "src/main.js"] }
+```
+
+Example: a pnpm Next.js app whose build needs extra env names.
+
+```json
+{ "build": ["pnpm", "run", "build"], "start": ["pnpm", "run", "start"], "env_names": ["NEXT_PUBLIC_SITE_URL", "AUTH_SECRET"] }
 ```

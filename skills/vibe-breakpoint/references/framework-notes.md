@@ -1,10 +1,11 @@
 # Where to look (routes, auth, schema)
 
-Read code only. Never open a real `.env*` file; env names are in `inspect.json`.
+Read code only. Env var names are in `env_names` in `inspect.json`; do not read env files other than `.env.example`/`.sample`/`.template`.
 
 ## Next.js
 - Routes: `app/**/route.ts` (exports GET/POST), `pages/api/**`, server actions (`"use server"`), page files that fetch data on the server.
 - Auth: `middleware.ts`, NextAuth/Auth.js config (`auth.ts`, `app/api/auth/[...nextauth]/route.ts`). Credentials provider means email+password login is possible; only OAuth providers means public endpoints only.
+- Server Action login (`"use server"` form) cannot be scripted by the load step: use public endpoints and say so.
 - Base path of a route is its folder path: `app/api/projects/route.ts` is `/api/projects`.
 
 ## Express and other Node servers

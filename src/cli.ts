@@ -4,9 +4,10 @@ import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PROFILES, type Profile } from "./sandbox/compose.js";
-import { detectApp, Unsupported } from "./sandbox/detect.js";
+import { detectApp, hostBuildDir, Unsupported } from "./sandbox/detect.js";
 import { safeWriteOut } from "./sandbox/safe-out.js";
 import { envNames } from "./sandbox/env-names.js";
+import { parseRunJson, type RunJson } from "./sandbox/run-json.js";
 import { appLogs, buildApp, cleanup, createSandbox, down, migrate, missingImages, newRunId, onSignals, pullImages, probeK6, psql, requiredImages, runStage, saveMockLog, up } from "./sandbox/sandbox.js";
 import { dbColumns, parseSeed, schemaErrors, seedSize, SIZES, type Seed, type Size } from "./seed/seed.js";
 import { loadConfig, parseScenario } from "./load/scenario.js";
@@ -26,6 +27,10 @@ const usage = `usage:
   vibe-breakpoint cleanup  [--all]
   vibe-breakpoint --version
 `;
+
+function hostBuildDirOf(project: string): string | null {
+  try { return hostBuildDir(readFileSync(join(project, "Dockerfile"), "utf8")); } catch { return null; }
+}
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -89,11 +94,16 @@ async function runCmd(project: string | undefined) {
     const scenarioText = inputFile(scenarioFile, "scenario.json");
     const scenario = scenarioText !== undefined ? parseScenario(scenarioText, seed) : undefined;
     if (!scenario) console.log("vibe-breakpoint: no scenario.json; skipping load test");
-    const sb = createSandbox(project, runId, profile as Profile, mockDir, template);
+    const runText = inputFile(join(project, ".vibe-breakpoint", "run.json"), "run.json");
+    const runJson = runText !== undefined ? parseRunJson(runText) : undefined;
+    const sb = createSandbox(project, runId, profile as Profile, mockDir, template, runJson);
     composePath = sb.composePath;
     env = sb.env;
     if (scenario) sb.images.push("grafana/k6");
     const missing = missingImages(sb.images);
+    const hostDir = sb.plan.dockerfile === "template" ? hostBuildDirOf(project) : null;
+    if (hostDir) console.log(`vibe-breakpoint: project Dockerfile not used: it copies ${hostDir}/ from the host build; using the template`);
+    if (sb.plan.startFromDockerfile) console.log(`vibe-breakpoint: start command taken from the project Dockerfile (${sb.plan.start?.join(" ")})`);
     console.log(`vibe-breakpoint: building app image from ${sb.plan.dockerfile === "project" ? "project Dockerfile" : "template node.Dockerfile"} (network access during build only; the app runs offline)`);
     console.log(`vibe-breakpoint: images: ${sb.images.map((i) => `${i} (${missing.includes(i) ? "missing" : "local"})`).join(", ")}`);
     if (missing.length) {
@@ -121,7 +131,7 @@ async function runCmd(project: string | undefined) {
     try {
       up(composePath, ["app"]);
     } catch (e) {
-      throw new Error(`app did not become healthy within 120 s (the health check needs Docker Engine 25 or newer) (GET ${sb.healthPath}):\n${appLogs(composePath)}\n${e instanceof Error ? e.message : ""}`);
+      throw new Error(`app did not start: app did not become healthy within 120 s (the health check needs Docker Engine 25 or newer) (GET ${sb.healthPath}):\n${appLogs(composePath)}\n${e instanceof Error ? e.message : ""}`);
     }
     console.log(`vibe-breakpoint: sandbox ready ${runId}`);
     const probe: Probe = {};
@@ -208,7 +218,7 @@ async function runCmd(project: string | undefined) {
       safeWriteOut(project, "out/result.json", JSON.stringify(result, null, 2));
       const bp = result.breaking_point;
       console.log(bp
-        ? `vibe-breakpoint: breaking point ${bp.users_broke} users (${bp.reason}); handles about ${bp.users_ok}; limiting: ${result.limiting_resource}`
+        ? `vibe-breakpoint: breaking point ${bp.users_broke} users (${bp.reason}); ${bp.users_ok > 0 ? `handles about ${bp.users_ok}` : "broke at the first stage tested"}; limiting: ${result.limiting_resource}`
         : `vibe-breakpoint: no breaking point up to ${done[done.length - 1].users}`);
     }
   } catch (e) {
@@ -242,7 +252,12 @@ function inspectCmd(project: string | undefined) {
     : { available: false, reason: d.error ? "the docker command was not found" : "the Docker daemon is not running or not reachable" };
   let plan: ReturnType<typeof detectApp> | undefined;
   let unsupported: string | null = null;
-  try { plan = detectApp(project); } catch (e) { unsupported = e instanceof Unsupported ? e.message : "package.json could not be parsed"; }
+  let run: RunJson = {};
+  let runError: string | null = null;
+  const runText = readRegular(join(project, ".vibe-breakpoint", "run.json"));
+  if (runText !== undefined) { try { run = parseRunJson(runText); } catch (e) { runError = e instanceof Error ? e.message : "run.json is not valid"; } }
+  let canFix = false;
+  try { plan = detectApp(project, run); } catch (e) { unsupported = e instanceof Unsupported ? e.message : "package.json could not be parsed"; canFix = e instanceof Unsupported && e.runJsonCanFix; }
   let dbDeps: string[] = [];
   try {
     const pkg = JSON.parse(readFileSync(join(project, "package.json"), "utf8"));
@@ -266,6 +281,12 @@ function inspectCmd(project: string | undefined) {
     missing_images: docker.available && plan ? missingImages(images) : null,
     has_scenario: isFile("scenario.json"),
     has_seed: isFile("seed.json"),
+    build: plan && plan.dockerfile === "template" && plan.buildCmd !== "true" ? plan.buildCmd : null,
+    start: plan?.start?.join(" ") ?? null,
+    start_source: plan?.startSource ?? null,
+    has_run: isFile("run.json"),
+    ...(runError && { run_json_error: runError }),
+    ...(canFix && { run_json_can_fix: true }),
   };
   const text = JSON.stringify(info, null, 2);
   try { safeWriteOut(project, "inspect.json", text); } catch (e) { fail(e instanceof Error ? e.message : "could not write inspect.json"); }

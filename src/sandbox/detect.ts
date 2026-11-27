@@ -1,7 +1,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { SKIP_DIRS } from "./copy.js";
+import type { RunJson } from "./run-json.js";
 
-export class Unsupported extends Error {} // message = text after "unsupported because "
+export class Unsupported extends Error { constructor(m: string, readonly runJsonCanFix = false) { super(m); } } // message = text after "unsupported because "
 
 export type Migrations =
   | { kind: "prisma" | "drizzle" | "knex"; cmd: string[] }
@@ -12,18 +14,109 @@ export type AppPlan = {
   dockerfile: "project" | "template";
   buildCmd: string;
   start: string[] | null;
+  startFromDockerfile?: true; // D-063
+  startSource: "script" | "main" | "entry file" | "dockerfile" | "run.json" | "project Dockerfile";
   migrations: Migrations;
 };
 
 const OTHER = ["go.mod", "requirements.txt", "pyproject.toml", "Gemfile", "composer.json", "pom.xml", "build.gradle", "Cargo.toml"];
 const ENTRIES = ["server.js", "index.js", "app.js", "src/server.js", "src/index.js"];
-const DEV_LIKE = /\b(next dev|nodemon|ts-node-dev|vite)\b|--watch|tsx watch/;
+const DEV_LIKE = /\b(next dev|nodemon|ts-node-dev|vite|nx serve)\b|--watch|tsx watch/;
 const bin = (n: string) => `node_modules/.bin/${n}`;
 
-function detectMigrations(dir: string): Migrations {
+// first skipped dir (dist, build, ...) that a COPY/ADD without --from takes from the host, else null (D-059)
+// ponytail: single-line instructions only (no `\` continuations, no JSON-array form). Add when a real repo uses them.
+export function hostBuildDir(dockerfile: string): string | null {
+  for (const line of dockerfile.split(/\r?\n/)) {
+    const m = /^\s*(?:COPY|ADD)\s+(.*)$/i.exec(line);
+    if (!m) continue;
+    const t = m[1].trim().split(/\s+/);
+    if (t.some((x) => /^--from\b/.test(x))) continue;
+    for (const src of t.filter((x) => !x.startsWith("--")).slice(0, -1)) {
+      const seg = src.replace(/^(\.\/)+/, "").split("/")[0];
+      if (SKIP_DIRS.has(seg)) return seg;
+    }
+  }
+  return null;
+}
+
+// start command from the project Dockerfile when it copies a host-built dir (D-063): `node <path>` mapped through the COPY back to the host dir
+// ponytail: single-line, exec-form, `node`-only, one COPY mapping, final stage. Add multi-stage/shell-form/`npm` CMD support when a real repo needs it.
+export function dockerfileStart(dockerfile: string): { start: string[] | null; text: string | null } {
+  const lines = dockerfile.split(/\r?\n/);
+  const last = lines.map((l) => /^\s*FROM\s/i.test(l)).lastIndexOf(true);
+  let workdir = "";
+  const copies: [string, string][] = [];
+  const cmds: { kind: string; text: string }[] = [];
+  for (const line of lines.slice(last + 1)) {
+    const m = /^\s*(WORKDIR|COPY|ADD|CMD|ENTRYPOINT)\s+(.*)$/i.exec(line);
+    if (!m) continue;
+    const kind = m[1].toUpperCase(), text = m[2].trim();
+    if (kind === "WORKDIR") workdir = text;
+    else if (kind === "CMD" || kind === "ENTRYPOINT") cmds.push({ kind, text });
+    else {
+      const t = text.split(/\s+/);
+      if (t.some((x) => /^--from\b/.test(x))) continue;
+      const a = t.filter((x) => !x.startsWith("--"));
+      if (a.length >= 2) for (const src of a.slice(0, -1)) copies.push([src, a[a.length - 1]]);
+    }
+  }
+  const lastCmd = cmds[cmds.length - 1]?.text ?? null; // Docker uses the last CMD/ENTRYPOINT
+  const hint = lastCmd && lastCmd.length <= 80 && !lastCmd.includes("$") ? lastCmd : null;
+  const arr = (kind: string): string[] | null => {
+    const c = [...cmds].reverse().find((x) => x.kind === kind);
+    if (!c) return [];
+    try { const v = JSON.parse(c.text); return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : null; } catch { return null; }
+  };
+  const ep = arr("ENTRYPOINT"), cmd = arr("CMD");
+  const argv = ep && cmd ? [...ep, ...cmd] : null;
+  if (!argv || argv[0] !== "node" || argv.length < 2 || argv.some((x) => x.includes("$") || x.startsWith("/") && !x.startsWith("--") || x.split("/").includes(".."))) return { start: null, text: hint };
+  const norm = (x: string) => x.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  const i = argv.findIndex((x, k) => k > 0 && !x.startsWith("-"));
+  if (i < 0) return { start: null, text: hint };
+  const p = norm(argv[i]);
+  for (const [src, destRaw] of copies) {
+    let dest = norm(destRaw);
+    if (dest.startsWith("/")) {
+      const w = norm(workdir);
+      if (w && dest === w) dest = ".";
+      else if (!w || !dest.startsWith(w + "/")) continue;
+      else dest = dest.slice(w.length + 1);
+    }
+    if (dest === ".") dest = "";
+    const s = norm(src);
+    if (!SKIP_DIRS.has(s.split("/")[0])) continue;
+    if (/\.[^/]+$/.test(s)) { // file source (R1-1): only the file itself can be the entry
+      const b = s.split("/").pop()!;
+      if (p === dest || p === (dest ? `${dest}/${b}` : b)) { const out = [...argv]; out[i] = s; return { start: out, text: hint }; }
+      continue;
+    }
+    const rest = dest === "" ? p : p === dest ? "" : p.startsWith(dest + "/") ? p.slice(dest.length + 1) : null;
+    if (rest === null) continue;
+    const out = [...argv];
+    out[i] = rest ? `${s}/${rest}` : s;
+    return { start: out, text: hint };
+  }
+  return { start: null, text: hint };
+}
+
+function prismaSchema(dir: string, pkg: { prisma?: { schema?: unknown } }): string | null {
+  const custom = typeof pkg.prisma?.schema === "string" ? pkg.prisma.schema : "";
+  const schema = custom && existsSync(join(dir, custom)) ? custom : "prisma/schema.prisma";
+  return existsSync(join(dir, schema)) ? schema : null;
+}
+
+// prisma generate in the image build (the client is not generated by npm ci). ponytail: only when the prisma CLI is a dependency and the schema path is plain; prisma.config.ts is not read.
+function prismaGenerate(dir: string, pkg: { prisma?: { schema?: unknown } }, deps: Record<string, unknown>): string {
+  const schema = prismaSchema(dir, pkg);
+  return schema && "prisma" in deps && /^[\w./-]+$/.test(schema) && !schema.includes("..") ? `${bin("prisma")} generate --schema ${schema}` : "";
+}
+
+function detectMigrations(dir: string, pkg: { prisma?: { schema?: unknown } }): Migrations {
   const has = (p: string) => existsSync(join(dir, p));
-  if (has("prisma/schema.prisma")) {
-    return { kind: "prisma", cmd: has("prisma/migrations") ? [bin("prisma"), "migrate", "deploy"] : [bin("prisma"), "db", "push", "--skip-generate"] };
+  const schema = prismaSchema(dir, pkg);
+  if (schema) {
+    return { kind: "prisma", cmd: has(join(dirname(schema), "migrations")) ? [bin("prisma"), "migrate", "deploy"] : [bin("prisma"), "db", "push", "--skip-generate"] };
   }
   const dz = ["ts", "js", "mjs", "cjs"].map((e) => `drizzle.config.${e}`).find(has);
   if (dz) {
@@ -39,7 +132,7 @@ function detectMigrations(dir: string): Migrations {
   return { kind: "none" };
 }
 
-export function detectApp(dir: string): AppPlan {
+export function detectApp(dir: string, run: RunJson = {}): AppPlan {
   const pj = join(dir, "package.json");
   if (!existsSync(pj)) {
     const other = OTHER.find((f) => existsSync(join(dir, f)));
@@ -53,24 +146,34 @@ export function detectApp(dir: string): AppPlan {
   const nextjs = "next" in deps;
   const scripts = pkg.scripts ?? {};
   const devLike = typeof scripts.start === "string" && DEV_LIKE.test(scripts.start);
-  const project = existsSync(join(dir, "Dockerfile"));
+  const df = existsSync(join(dir, "Dockerfile")) ? readFileSync(join(dir, "Dockerfile"), "utf8") : null;
+  const project = df !== null && hostBuildDir(df) === null;
   let start: string[] | null = null;
+  let fromDockerfile = false;
+  let startSource: AppPlan["startSource"] = "project Dockerfile";
   if (!project) {
-    if (typeof scripts.start === "string" && !devLike) start = ["npm", "run", "start"];
-    else if (nextjs) start = [bin("next"), "start"];
-    else if (pkg.main && existsSync(join(dir, pkg.main))) start = ["node", pkg.main];
+    if (run.start) { start = run.start; startSource = "run.json"; } // D-068: run.json wins on the template path
+    else if (typeof scripts.start === "string" && !devLike) { start = ["npm", "run", "start"]; startSource = "script"; }
+    else if (nextjs) { start = [bin("next"), "start"]; startSource = "script"; }
+    else if (pkg.main && existsSync(join(dir, pkg.main))) { start = ["node", pkg.main]; startSource = "main"; }
     else {
       const f = ENTRIES.find((e) => existsSync(join(dir, e)));
-      if (!f) throw new Unsupported(`no start script and no entry file (looked for: ${ENTRIES.join(", ")})${devLike ? "; the start script runs a dev server" : ""}`);
-      start = ["node", f];
+      if (f) { start = ["node", f]; startSource = "entry file"; }
+      else {
+        const d = df !== null ? dockerfileStart(df) : null;
+        if (d?.start) { start = d.start; fromDockerfile = true; startSource = "dockerfile"; }
+        else throw new Unsupported(`no start script and no entry file (looked for: ${ENTRIES.join(", ")})${devLike ? "; the start script runs a dev server" : ""}${d?.text ? `; the project Dockerfile starts it with ${d.text}` : ""}`, true);
+      }
     }
   }
   return {
     framework: nextjs ? "nextjs" : "node",
     dockerfile: project ? "project" : "template",
-    buildCmd: project ? "true" : scripts.build ? "npm run build" : nextjs ? bin("next") + " build" : "true",
+    buildCmd: project ? "true" : [prismaGenerate(dir, pkg, deps), run.build !== undefined ? (run.build?.join(" ") ?? "") : scripts.build ? "npm run build" : nextjs ? bin("next") + " build" : ""].filter(Boolean).join(" && ") || "true",
     start,
-    migrations: detectMigrations(dir),
+    startSource,
+    ...(fromDockerfile && { startFromDockerfile: true as const }),
+    migrations: detectMigrations(dir, pkg),
   };
 }
 
@@ -86,7 +189,7 @@ export function healthPath(projectDir: string): string {
 export function fromImages(dockerfile: string): string[] {
   const stages = new Set<string>();
   const out = new Set<string>();
-  for (const line of dockerfile.split("\n")) {
+  for (const line of dockerfile.split(/\r?\n/)) {
     const m = /^\s*FROM\s+(.*)$/i.exec(line);
     if (!m) continue;
     const t = m[1].trim().split(/\s+/).filter((x) => !x.startsWith("--"));

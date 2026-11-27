@@ -29,7 +29,7 @@ describe("cli bundle", () => {
     const hermetic = { ...process.env, DOCKER_HOST: "unix:///nonexistent/docker.sock" };
     const insp = (d: string, env: NodeJS.ProcessEnv = hermetic, node = "node") => spawnSync(node, [bundle, "inspect", d], { cwd: tmpdir(), encoding: "utf8", env });
     const copy = (f: string) => { const d = mkdtempSync(join(tmpdir(), "vbinsp-")); cpSync(resolve("fixtures", f), d, { recursive: true }); return d; };
-    const keys = ["schema", "tool_version", "docker", "supported", "unsupported_reason", "framework", "dockerfile", "migrations", "db_deps", "env_names", "images", "missing_images", "has_scenario", "has_seed"];
+    const keys = ["schema", "tool_version", "docker", "supported", "unsupported_reason", "framework", "dockerfile", "migrations", "db_deps", "env_names", "images", "missing_images", "has_scenario", "has_seed", "build", "start", "start_source", "has_run"];
     const listing = (root: string): string[] => readdirSync(root, { withFileTypes: true }).flatMap((e) => (e.name === ".vibe-breakpoint" ? [] : e.isDirectory() ? [e.name + "/", ...listing(join(root, e.name)).map((x) => `${e.name}/${x}`)] : [`${e.name}:${lstatSync(join(root, e.name)).size}`]));
     for (const [f, fw, mig, deps] of [["express-pg", "node", "sql", ["pg"]], ["next-drizzle", "nextjs", "drizzle", ["drizzle-orm", "pg"]]] as const) {
       it(`${f}: writes inspect.json equal to stdout`, () => {
